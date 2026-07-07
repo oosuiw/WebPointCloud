@@ -1061,6 +1061,47 @@ def _parse_vmap_bg(path: str, key: str) -> None:
             _vmap_cache[key] = {'status': 'error', 'progress': 0, 'message': str(exc)}
 
 
+@api_bp.route('/api/vectormap/browse')
+def vmap_browse():
+    """서버 디렉토리 탐색 — 폴더와 .osm 파일 목록 반환"""
+    default_dir = os.path.expanduser('~/autoware_map/output_전국통합_merged')
+    req_dir = request.args.get('dir', default_dir).strip()
+    real = os.path.realpath(req_dir)
+
+    # 홈 디렉토리 이하만 허용
+    home = os.path.realpath(os.path.expanduser('~'))
+    if not real.startswith(home):
+        return jsonify({'error': '접근 불가 경로'}), 403
+    if not os.path.isdir(real):
+        return jsonify({'error': '디렉토리 없음'}), 404
+
+    entries = []
+    try:
+        for name in sorted(os.listdir(real)):
+            full = os.path.join(real, name)
+            if os.path.isdir(full):
+                # 하위에 .osm이 있으면 표시
+                try:
+                    has_osm = any(
+                        f.endswith('.osm')
+                        for f in os.listdir(full)
+                        if os.path.isfile(os.path.join(full, f))
+                    )
+                except PermissionError:
+                    has_osm = False
+                entries.append({'name': name, 'type': 'dir', 'path': full, 'has_osm': has_osm})
+            elif name.endswith('.osm'):
+                entries.append({
+                    'name': name, 'type': 'osm', 'path': full,
+                    'size_mb': round(os.path.getsize(full) / 1e6, 1),
+                })
+    except PermissionError:
+        return jsonify({'error': '권한 없음'}), 403
+
+    parent = os.path.dirname(real) if real != home else None
+    return jsonify({'dir': real, 'parent': parent, 'entries': entries})
+
+
 @api_bp.route('/api/vectormap/load', methods=['POST'])
 def vmap_load():
     err = _require_json()

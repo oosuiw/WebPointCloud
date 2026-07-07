@@ -143,21 +143,23 @@
                 <span class="accordion-arrow">&#9660;</span>
             </div>
             <div class="accordion-body" data-accordion-body="vectormap">
-                <div class="ctrl-row" style="gap:4px">
-                    <input type="text" id="vmap-path" placeholder="lanelet2_map.osm 경로 입력"
-                           style="flex:1;font-size:11px;min-width:0">
-                    <button class="btn btn-sm primary" id="btn-vmap-load">Load</button>
+                <!-- Load / Clear 버튼 행 -->
+                <div class="btn-row">
+                    <button class="btn primary flex-1" id="btn-vmap-open">Load Vector Map</button>
+                    <button class="btn" id="btn-vmap-clear" title="Remove vector map">Clear</button>
                 </div>
+                <!-- 파싱 진행바 -->
                 <div id="vmap-progress-wrap" style="display:none;margin-top:6px">
                     <div class="progress-bar"><div id="vmap-progress-fill" class="progress-fill" style="width:0%"></div></div>
                     <div class="text-hint" id="vmap-progress-msg" style="margin-top:3px"></div>
                 </div>
                 <hr class="sep">
+                <!-- 레이어 토글 -->
                 <div class="ctrl-row compact">
                     <input type="checkbox" id="ckb-vmap-layer" checked>
-                    <label for="ckb-vmap-layer">Vector Map 표시</label>
+                    <label for="ckb-vmap-layer">표시</label>
                 </div>
-                <div class="sub-label" style="margin-top:6px">연도별 레이어</div>
+                <div class="sub-label" style="margin-top:6px">연도별</div>
                 <div class="ctrl-row compact">
                     <input type="checkbox" id="ckb-vmap-2024" checked>
                     <label for="ckb-vmap-2024" class="vmap-yr-label yr2024">&#9646; 2024</label>
@@ -174,9 +176,6 @@
                     <label class="narrow">Z 오프셋</label>
                     <input type="number" id="vmap-z-offset" value="0" step="0.1" style="width:70px">
                     <span class="text-hint" style="margin-left:4px">m</span>
-                </div>
-                <div class="btn-row" style="margin-top:8px">
-                    <button class="btn flex-1" id="btn-vmap-clear">Clear</button>
                 </div>
             </div>
         </div>
@@ -378,6 +377,20 @@
             <div id="map-list-wrap" class="scroll-list" style="max-height:50vh">
                 <div id="map-list"></div>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ Vector Map Browser Modal ═══ -->
+<div class="modal-bg" id="modal-vmap">
+    <div class="modal">
+        <div class="modal-header">
+            <h2>Load Vector Map</h2>
+            <button class="modal-close" id="btn-vmap-modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="vmap-breadcrumb" id="vmap-breadcrumb"></div>
+            <div id="vmap-file-list" class="scroll-list" style="max-height:55vh"></div>
         </div>
     </div>
 </div>

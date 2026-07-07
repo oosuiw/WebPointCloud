@@ -927,6 +927,17 @@ kbd {
 .vmap-badge.parsing { background: rgba(88,166,255,0.12); color: #58a6ff; border: 1px solid #58a6ff44; }
 .vmap-badge.error   { background: rgba(255,68,68,0.12);  color: #ff4444; border: 1px solid #ff444444; }
 
+/* Vector Map browser modal breadcrumb */
+.vmap-breadcrumb {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+}
+
 @media (max-width: 768px) {
     #app {
         grid-template-columns: 0px 0px 1fr;
