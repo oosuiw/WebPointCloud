@@ -71,9 +71,13 @@ export class VectorMapLayer {
         const positions = new Float32Array(buf, 0, segCount * 6);
         const types     = new Uint8Array(buf, posBytes, segCount);
 
+        this._vmapOx = vmapOx;
+        this._vmapOy = vmapOy;
+        this._vmapOz = vmapOz;
+
         this._buildMesh(positions, types, segCount);
 
-        // PCD coordOffset이 있으면 벡터맵 group을 PCD 좌표계에 정렬
+        // coordOffset(PCD 기준 또는 첫 번째 OSM 기준)이 있으면 좌표 정렬
         if (coordOffset && this._group) {
             this._baseZ = vmapOz - coordOffset[2];
             this._group.position.x = vmapOx - coordOffset[0];

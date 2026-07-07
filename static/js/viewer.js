@@ -67,7 +67,8 @@ export class Viewer {
 
         // Scene
         this.scene = new THREE.Scene();
-        this.vmapLayers = [];   // VectorMapLayer[]
+        this.vmapLayers = [];       // VectorMapLayer[]
+        this._vmapRefOffset = null; // 첫 번째 OSM offset — PCD 없을 때 공통 기준
         this.scene.background = new THREE.Color(0x0d0d1a);
 
         // Camera (Z-up)
@@ -922,12 +923,20 @@ export class Viewer {
     loadVectorMap(osmPath, { _key, _status, onProgress, onDone, onError } = {}) {
         const layer = new VectorMapLayer(this.scene);
         this.vmapLayers.push(layer);
-        layer.load(osmPath, this.coordOffset, {
+        // PCD coordOffset → PCD 기준 정렬
+        // 그 외 → 첫 번째 OSM offset을 공통 기준으로 사용 (없으면 null → 자체 중심)
+        const refOffset = this.coordOffset || this._vmapRefOffset;
+        layer.load(osmPath, refOffset, {
             _key, _status,
             onProgress,
             onDone: (segCount) => {
                 this._dirty = true;
-                if (!this.coordOffset && layer._group) {
+                // PCD 없고 기준 offset 미설정이면 → 이 레이어를 기준으로 등록
+                if (!this.coordOffset && !this._vmapRefOffset && layer._vmapOx !== undefined) {
+                    this._vmapRefOffset = [layer._vmapOx, layer._vmapOy, layer._vmapOz || 0];
+                }
+                // PCD도 없고 첫 번째 OSM일 때만 카메라 fit
+                if (!this.coordOffset && !refOffset && layer._group) {
                     const box = new THREE.Box3().setFromObject(layer._group);
                     const center = new THREE.Vector3();
                     box.getCenter(center);
@@ -959,6 +968,7 @@ export class Viewer {
     clearVectorMap() {
         this.vmapLayers.forEach(l => l.clear());
         this.vmapLayers = [];
+        this._vmapRefOffset = null;
         this._dirty = true;
     }
 
