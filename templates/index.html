@@ -146,6 +146,7 @@
                 <!-- Load / Clear 버튼 행 -->
                 <div class="btn-row">
                     <button class="btn primary flex-1" id="btn-vmap-open">Load Vector Map</button>
+                    <input type="file" id="vmap-file-input" accept=".osm" hidden>
                     <button class="btn" id="btn-vmap-clear" title="Remove vector map">Clear</button>
                 </div>
                 <!-- 파싱 진행바 -->
@@ -369,22 +370,6 @@
 </div>
 
 <!-- ═══ Vector Map Browser Modal ═══ -->
-<div class="modal-bg" id="modal-vmap">
-    <div class="modal">
-        <div class="modal-header">
-            <h2>Load Vector Map</h2>
-            <button class="modal-close" id="btn-vmap-modal-close">&times;</button>
-        </div>
-        <div class="modal-body">
-            <div style="display:flex;gap:8px;margin-bottom:8px">
-                <button class="btn primary" id="btn-vmap-upload">Upload File</button>
-                <input type="file" id="vmap-file-input" accept=".osm" hidden>
-            </div>
-            <div class="vmap-breadcrumb" id="vmap-breadcrumb"></div>
-            <div id="vmap-file-list" class="scroll-list" style="max-height:50vh"></div>
-        </div>
-    </div>
-</div>
 
 <!-- ═══ Map Manage Modal ═══ -->
 <div class="modal-bg" id="modal-map-manage">

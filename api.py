@@ -1166,91 +1166,35 @@ def _parse_vmap_bg(path: str, key: str, tmp_path: str = None) -> None:
             except: pass
 
 
-@api_bp.route('/api/vectormap/browse')
-def vmap_browse():
-    """서버 디렉토리 탐색 — 폴더와 .osm 파일 목록 반환"""
-    default_dir = os.path.expanduser('~/autoware_map/output_전국통합_merged')
-    req_dir = request.args.get('dir', default_dir).strip()
-    real = os.path.realpath(req_dir)
-
-    # 홈 디렉토리 이하만 허용
-    home = os.path.realpath(os.path.expanduser('~'))
-    if not real.startswith(home):
-        return jsonify({'error': '접근 불가 경로'}), 403
-    if not os.path.isdir(real):
-        return jsonify({'error': '디렉토리 없음'}), 404
-
-    entries = []
-    try:
-        for name in sorted(os.listdir(real)):
-            full = os.path.join(real, name)
-            if os.path.isdir(full):
-                # 하위에 .osm이 있으면 표시
-                try:
-                    has_osm = any(
-                        f.endswith('.osm')
-                        for f in os.listdir(full)
-                        if os.path.isfile(os.path.join(full, f))
-                    )
-                except PermissionError:
-                    has_osm = False
-                entries.append({'name': name, 'type': 'dir', 'path': full, 'has_osm': has_osm})
-            elif name.endswith('.osm'):
-                entries.append({
-                    'name': name, 'type': 'osm', 'path': full,
-                    'size_mb': round(os.path.getsize(full) / 1e6, 1),
-                })
-    except PermissionError:
-        return jsonify({'error': '권한 없음'}), 403
-
-    parent = os.path.dirname(real) if real != home else None
-    return jsonify({'dir': real, 'parent': parent, 'entries': entries})
-
-
 @api_bp.route('/api/vectormap/load', methods=['POST'])
 def vmap_load():
     if not _HAS_PYPROJ:
         return jsonify({'error': 'pyproj not installed — pip install pyproj'}), 500
 
-    tmp_path = None
+    if 'file' not in request.files:
+        return jsonify({'error': 'file upload required'}), 400
 
-    # ── 파일 업로드 방식 ──
-    if 'file' in request.files:
-        f = request.files['file']
-        if not (f.filename or '').lower().endswith('.osm'):
-            return jsonify({'error': '.osm 파일만 지원합니다'}), 400
-        import tempfile
-        fd, tmp_path = tempfile.mkstemp(suffix='.osm')
-        os.close(fd)
-        f.save(tmp_path)
-        real_path = tmp_path
-        key = hashlib.md5(f.filename.encode() + str(os.path.getsize(tmp_path)).encode()).hexdigest()[:16]
-    # ── 경로 지정 방식 ──
-    else:
-        if not request.is_json:
-            return jsonify({'error': 'JSON or file upload required'}), 400
-        path = (request.json.get('path') or '').strip()
-        if not path:
-            return jsonify({'error': 'path required'}), 400
-        real_path = os.path.realpath(path)
-        if not os.path.isfile(real_path):
-            return jsonify({'error': 'file not found'}), 404
-        if not real_path.endswith('.osm'):
-            return jsonify({'error': '.osm 파일만 지원합니다'}), 400
-        key = hashlib.md5(real_path.encode()).hexdigest()[:16]
+    f = request.files['file']
+    if not (f.filename or '').lower().endswith('.osm'):
+        return jsonify({'error': '.osm 파일만 지원합니다'}), 400
+
+    import tempfile
+    fd, tmp_path = tempfile.mkstemp(suffix='.osm')
+    os.close(fd)
+    f.save(tmp_path)
+    real_path = tmp_path
+    key = hashlib.md5(f.filename.encode() + str(os.path.getsize(tmp_path)).encode()).hexdigest()[:16]
 
     with _vmap_cache_lock:
         st = _vmap_cache.get(key, {}).get('status', 'idle')
 
     if st == 'ready':
-        if tmp_path:
-            try: os.unlink(tmp_path)
-            except: pass
+        try: os.unlink(tmp_path)
+        except: pass
         return jsonify({'key': key, 'status': 'ready'})
     if st == 'parsing':
-        if tmp_path:
-            try: os.unlink(tmp_path)
-            except: pass
+        try: os.unlink(tmp_path)
+        except: pass
         return jsonify({'key': key, 'status': 'parsing'})
 
     with _vmap_cache_lock:
