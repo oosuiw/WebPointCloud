@@ -82,38 +82,47 @@ export function initFileManagement(viewer, legend, deps, uiState) {
             return;
         }
 
-        // 첫 번째 파일: 메인 Point Cloud로 로드 (기존과 동일하게 교체)
-        const [firstFile, ...restFiles] = files;
-        $('st-main').textContent = `Uploading ${firstFile.name} (${formatFileSize(firstFile.size)})...`;
-        showLoading(`Loading ${firstFile.name}...`);
-        try {
-            const data = await uploadLasFile(firstFile, pct => {
-                $('st-main').textContent = `Uploading ${firstFile.name}... ${pct}%`;
-            });
-            if (data.type === 'gaussian') {
-                viewer.loadGaussianSplat(data);
-            } else {
-                viewer.loadPointCloud(data);
-                registerMainPcdLayer(firstFile.name, data);
-            }
-            legend.update(viewer.colorMode, data.bounds, data.offset ? data.offset[2] : 0);
-            if (data.savedPath) {
-                const { setCurrentPath } = await import('./analysis.js');
-                setCurrentPath(data.savedPath);
-            }
-            $('compare-a-name').textContent = firstFile.name;
-            $('no-data-msg').style.display = 'none';
-            const label = data.type === 'gaussian' ? 'gaussians' : 'points';
-            $('st-main').textContent = `Loaded ${data.numPoints.toLocaleString()} ${label}`;
-            appendLog(`Loaded ${firstFile.name} (${data.numPoints.toLocaleString()} ${label})`, 'success');
-        } catch (err) {
-            $('st-main').textContent = `Error: ${err.message}`;
-            showToast(`Failed: ${err.message}`, 'error');
-        } finally {
-            hideLoading();
+        // 이미 메인 PCD가 로드돼 있으면 새로 고른 파일은 전부 추가 레이어로
+        // (Focus 버튼으로 언제든 이동할 수 있으니 기존 것을 덮어쓸 필요 없음)
+        // 메인이 비어있을 때만 첫 파일을 메인으로 로드하고 나머지는 추가 레이어로
+        let firstFile = null;
+        let restFiles = files;
+        if (!viewer.pointCloud) {
+            [firstFile, ...restFiles] = files;
         }
 
-        // 나머지 파일들: 좌표 기준으로 정렬된 추가 레이어로 로드
+        if (firstFile) {
+            $('st-main').textContent = `Uploading ${firstFile.name} (${formatFileSize(firstFile.size)})...`;
+            showLoading(`Loading ${firstFile.name}...`);
+            try {
+                const data = await uploadLasFile(firstFile, pct => {
+                    $('st-main').textContent = `Uploading ${firstFile.name}... ${pct}%`;
+                });
+                if (data.type === 'gaussian') {
+                    viewer.loadGaussianSplat(data);
+                } else {
+                    viewer.loadPointCloud(data);
+                    registerMainPcdLayer(firstFile.name, data);
+                }
+                legend.update(viewer.colorMode, data.bounds, data.offset ? data.offset[2] : 0);
+                if (data.savedPath) {
+                    const { setCurrentPath } = await import('./analysis.js');
+                    setCurrentPath(data.savedPath);
+                }
+                $('compare-a-name').textContent = firstFile.name;
+                $('no-data-msg').style.display = 'none';
+                const label = data.type === 'gaussian' ? 'gaussians' : 'points';
+                $('st-main').textContent = `Loaded ${data.numPoints.toLocaleString()} ${label}`;
+                appendLog(`Loaded ${firstFile.name} (${data.numPoints.toLocaleString()} ${label})`, 'success');
+            } catch (err) {
+                $('st-main').textContent = `Error: ${err.message}`;
+                showToast(`Failed: ${err.message}`, 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // 나머지 파일들(또는 메인이 이미 있어 전체 파일들): 추가 레이어로 로드
         for (const f of restFiles) {
             await addExtraCloudFile(f);
         }
@@ -254,17 +263,20 @@ export function initFileManagement(viewer, legend, deps, uiState) {
                         showLoading(`Loading ${mapName}/${f}...`);
                         try {
                             const data = await loadLasFromPath(fullPath);
+                            // 이미 메인 PCD가 있으면 기존 것을 덮어쓰지 않고 추가 레이어로 로드
                             if (data.type === 'gaussian') {
                                 viewer.loadGaussianSplat(data);
+                            } else if (viewer.pointCloud) {
+                                const entry = viewer.addPointCloud(data);
+                                registerExtraCloudLayer(`${mapName}/${f}`, data, entry);
                             } else {
                                 viewer.loadPointCloud(data);
                                 registerMainPcdLayer(`${mapName}/${f}`, data);
+                                legend.update(viewer.colorMode, data.bounds, data.offset ? data.offset[2] : 0);
+                                $('compare-a-name').textContent = `${mapName}/${f}`;
+                                const { setCurrentPath } = await import('./analysis.js');
+                                setCurrentPath(fullPath);
                             }
-                            legend.update(viewer.colorMode, data.bounds, data.offset ? data.offset[2] : 0);
-                            $('compare-a-name').textContent = `${mapName}/${f}`;
-                            // Set current path for analysis
-                            const { setCurrentPath } = await import('./analysis.js');
-                            setCurrentPath(fullPath);
                             $('no-data-msg').style.display = 'none';
                             const label = data.type === 'gaussian' ? 'gaussians' : 'pts';
                             appendLog(`Map loaded: ${mapName}/${f} (${data.numPoints.toLocaleString()} ${label})`, 'success');
@@ -375,13 +387,17 @@ export function initFileManagement(viewer, legend, deps, uiState) {
         showLoading(`Loading ${file.name}...`);
         try {
             const data = await uploadLasFile(file);
+            // 이미 메인 PCD가 있으면 기존 것을 덮어쓰지 않고 추가 레이어로 로드
             if (data.type === 'gaussian') {
                 viewer.loadGaussianSplat(data);
+            } else if (viewer.pointCloud) {
+                const entry = viewer.addPointCloud(data);
+                registerExtraCloudLayer(file.name, data, entry);
             } else {
                 viewer.loadPointCloud(data);
                 registerMainPcdLayer(file.name, data);
+                legend.update(viewer.colorMode, data.bounds, data.offset ? data.offset[2] : 0);
             }
-            legend.update(viewer.colorMode, data.bounds, data.offset ? data.offset[2] : 0);
             $('no-data-msg').style.display = 'none';
             const label = data.type === 'gaussian' ? 'gaussians' : 'points';
             $('st-main').textContent = `Loaded ${data.numPoints.toLocaleString()} ${label}`;
