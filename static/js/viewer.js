@@ -928,11 +928,6 @@ export class Viewer {
         this._dirty = true;
     }
 
-    setVectorMapYearVisible(yearIdx, show) {
-        this.vmapLayer.setYearVisible(yearIdx, show);
-        this._dirty = true;
-    }
-
     setVectorMapZOffset(z) {
         this.vmapLayer.setZOffset(z);
         this._dirty = true;

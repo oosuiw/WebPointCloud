@@ -1,7 +1,8 @@
 /* ═══════════════════════════════════════════════════════
    Vector Map UI — 파일 브라우저 모달 + 레이어 컨트롤
    ═══════════════════════════════════════════════════════ */
-import { showToast, appendLog } from './ui.js';
+import { showToast } from './ui-notifications.js';
+import { appendLog } from './ui-panels.js';
 
 const $ = id => document.getElementById(id);
 
@@ -124,10 +125,6 @@ export function initVectorMapUI(viewer) {
     // ── 레이어 토글 ────────────────────────────────────
     $('ckb-vmap-layer')?.addEventListener('change', e => {
         viewer.toggleLayer('vectormap', e.target.checked);
-    });
-
-    [['ckb-vmap-2024', 0], ['ckb-vmap-2020', 1], ['ckb-vmap-2019', 2]].forEach(([id, idx]) => {
-        $(id)?.addEventListener('change', e => viewer.setVectorMapYearVisible(idx, e.target.checked));
     });
 
     $('vmap-z-offset')?.addEventListener('change', e => {
