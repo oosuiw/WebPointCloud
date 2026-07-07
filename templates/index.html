@@ -146,7 +146,7 @@
                 <!-- Load / Clear 버튼 행 -->
                 <div class="btn-row">
                     <button class="btn primary flex-1" id="btn-vmap-open">Load Vector Map</button>
-                    <input type="file" id="vmap-file-input" accept=".osm" hidden>
+                    <input type="file" id="vmap-file-input" accept=".osm" multiple hidden>
                     <button class="btn" id="btn-vmap-clear" title="Remove vector map">Clear</button>
                 </div>
                 <!-- 파싱 진행바 -->
@@ -154,6 +154,8 @@
                     <div class="progress-bar"><div id="vmap-progress-fill" class="progress-fill" style="width:0%"></div></div>
                     <div class="text-hint" id="vmap-progress-msg" style="margin-top:3px"></div>
                 </div>
+                <!-- 로드된 레이어 목록 -->
+                <div id="vmap-layer-list" style="margin-top:4px"></div>
                 <hr class="sep">
                 <!-- 레이어 토글 -->
                 <div class="ctrl-row compact">

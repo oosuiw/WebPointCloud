@@ -927,16 +927,34 @@ kbd {
 .vmap-badge.parsing { background: rgba(88,166,255,0.12); color: #58a6ff; border: 1px solid #58a6ff44; }
 .vmap-badge.error   { background: rgba(255,68,68,0.12);  color: #ff4444; border: 1px solid #ff444444; }
 
-/* Vector Map browser modal breadcrumb */
-.vmap-breadcrumb {
+/* Vector Map layer list */
+.vmap-layer-item {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin-bottom: 8px;
-    padding: 4px 0;
-    border-bottom: 1px solid var(--border);
+    gap: 6px;
+    padding: 3px 4px;
+    border-radius: 4px;
+    font-size: 11px;
 }
+.vmap-layer-item:hover { background: var(--hover); }
+.vmap-item-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+}
+.vmap-item-meta { color: var(--text-dim); flex-shrink: 0; }
+.vmap-item-remove {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 0 2px;
+    font-size: 11px;
+    flex-shrink: 0;
+}
+.vmap-item-remove:hover { color: var(--danger); }
 
 @media (max-width: 768px) {
     #app {

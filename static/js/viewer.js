@@ -67,7 +67,7 @@ export class Viewer {
 
         // Scene
         this.scene = new THREE.Scene();
-        this.vmapLayer = new VectorMapLayer(this.scene);
+        this.vmapLayers = [];   // VectorMapLayer[]
         this.scene.background = new THREE.Color(0x0d0d1a);
 
         // Camera (Z-up)
@@ -909,7 +909,7 @@ export class Viewer {
         } else if (layer === 'kfrm') {
             this.kfrmClouds.forEach(c => { c.visible = show; });
         } else if (layer === 'vectormap') {
-            this.vmapLayer.setVisible(show);
+            this.vmapLayers.forEach(l => l.setVisible(show));
         } else {
             const cloudMap = { raw: 'rawCloud', cur: 'curCloud' };
             const prop = cloudMap[layer];
@@ -920,15 +920,15 @@ export class Viewer {
 
     // ── Vector Map ────────────────────────────────────────
     loadVectorMap(osmPath, { _key, _status, onProgress, onDone, onError } = {}) {
-        this.vmapLayer.load(osmPath, this.coordOffset, {
+        const layer = new VectorMapLayer(this.scene);
+        this.vmapLayers.push(layer);
+        layer.load(osmPath, this.coordOffset, {
             _key, _status,
             onProgress,
             onDone: (segCount) => {
                 this._dirty = true;
-                // PCD 없을 때만 카메라를 벡터맵으로 이동
-                // (PCD가 있으면 같은 지역이므로 현재 카메라 위치 유지)
-                if (!this.coordOffset && this.vmapLayer._group) {
-                    const box = new THREE.Box3().setFromObject(this.vmapLayer._group);
+                if (!this.coordOffset && layer._group) {
+                    const box = new THREE.Box3().setFromObject(layer._group);
                     const center = new THREE.Vector3();
                     box.getCenter(center);
                     const size = new THREE.Vector3();
@@ -939,19 +939,31 @@ export class Viewer {
                     this.camera.lookAt(center);
                     if (this.controls) { this.controls.target.copy(center); this.controls.update(); }
                 }
-                onDone?.(segCount);
+                onDone?.(segCount, layer);
             },
-            onError,
+            onError: (e) => {
+                this.vmapLayers = this.vmapLayers.filter(l => l !== layer);
+                layer.clear();
+                onError?.(e);
+            },
         });
+        return layer;
+    }
+
+    removeVectorMap(layer) {
+        layer.clear();
+        this.vmapLayers = this.vmapLayers.filter(l => l !== layer);
+        this._dirty = true;
     }
 
     clearVectorMap() {
-        this.vmapLayer.clear();
+        this.vmapLayers.forEach(l => l.clear());
+        this.vmapLayers = [];
         this._dirty = true;
     }
 
     setVectorMapZOffset(z) {
-        this.vmapLayer.setZOffset(z);
+        this.vmapLayers.forEach(l => l.setZOffset(z));
         this._dirty = true;
     }
     toggleGrid(show) { this.grid.visible = show; this._dirty = true; }
@@ -1399,7 +1411,7 @@ export class Viewer {
 
     setBackground(light) {
         this.scene.background = new THREE.Color(light ? 0xe8e8ee : 0x0d0d1a);
-        this.vmapLayer.setTheme(!light);
+        this.vmapLayers.forEach(l => l.setTheme(!light));
         this._dirty = true;
     }
 
