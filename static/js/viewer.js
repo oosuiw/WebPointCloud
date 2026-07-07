@@ -272,8 +272,24 @@ export class Viewer {
             const a = this._cameraAnim;
             const t = Math.min((now - a.startTime) / a.duration, 1);
             const s = t * t * (3 - 2 * t); // smoothstep
-            this.camera.position.lerpVectors(a.startPos, a.targetPos, s);
-            this.controls.target.lerpVectors(a.startTarget, a.targetTarget, s);
+            if (a.mode === 'topdown') {
+                // 방위각(theta)을 고정한 채 극각(phi)/거리만 보간 — 극점 통과 시
+                // 방위각이 재계산되며 생기는 급격한 회전(spin)을 방지
+                const radius = THREE.MathUtils.lerp(a.startRadius, a.targetRadius, s);
+                const phi = THREE.MathUtils.lerp(a.startPhi, a.targetPhi, s);
+                const target = new THREE.Vector3().lerpVectors(a.startTarget, a.targetTarget, s);
+                const sinPhi = Math.sin(phi);
+                const offset = new THREE.Vector3(
+                    radius * sinPhi * Math.cos(a.theta),
+                    radius * sinPhi * Math.sin(a.theta),
+                    radius * Math.cos(phi),
+                );
+                this.camera.position.copy(target).add(offset);
+                this.controls.target.copy(target);
+            } else {
+                this.camera.position.lerpVectors(a.startPos, a.targetPos, s);
+                this.controls.target.lerpVectors(a.startTarget, a.targetTarget, s);
+            }
             this.controls.update();
             this._dirty = true;
             if (t >= 1) this._cameraAnim = null;
@@ -1535,6 +1551,26 @@ export class Viewer {
         this._dirty = true;
     }
 
+    /* 방위각을 유지한 채 정면 위(top-down)로 부드럽게 눕히는 애니메이션 (Z-up) */
+    animateToTopDown(center, distance, duration = 500) {
+        const off = this.camera.position.clone().sub(this.controls.target);
+        const radius = off.length() || Math.max(distance, 1);
+        const theta = Math.atan2(off.y, off.x);
+        const phi = Math.acos(THREE.MathUtils.clamp(off.z / radius, -1, 1));
+
+        this._cameraAnim = {
+            mode: 'topdown',
+            startRadius: radius, targetRadius: distance,
+            startPhi: phi, targetPhi: 0.001,   // 완전한 극점(0) 대신 살짝 오프셋 — 특이점 방지
+            theta,                              // 고정 — 회전 없이 극각만 변화
+            startTarget: this.controls.target.clone(),
+            targetTarget: center.clone(),
+            startTime: performance.now(),
+            duration,
+        };
+        this._dirty = true;
+    }
+
     /* ── Camera Bookmarks ── */
     saveCameraBookmark(name) {
         return { pos: this.camera.position.toArray(), target: this.controls.target.toArray() };
@@ -1642,7 +1678,13 @@ export class Viewer {
             this.controls.enableRotate = false;
             this.controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
             this.controls.touches.ONE = THREE.TOUCH.PAN;
-            this.setView('top');
+
+            const b = this.bounds;
+            if (b) {
+                const cx = (b.xMin + b.xMax) / 2, cy = (b.yMin + b.yMax) / 2, cz = (b.zMin + b.zMax) / 2;
+                const sz = Math.max(b.xMax - b.xMin, b.yMax - b.yMin, b.zMax - b.zMin) * 1.2 || 30;
+                this.animateToTopDown(new THREE.Vector3(cx, cy, cz), sz);
+            }
         } else {
             this.controls.enableRotate = true;
             this.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
