@@ -989,10 +989,13 @@ def analysis_icp():
 _vmap_cache: dict = {}          # key → {status, progress, message, data?}
 _vmap_cache_lock = threading.Lock()
 
-_VNODE = re.compile(rb"<node id='(\d+)'[^>]+lat='([\d.-]+)'[^>]+lon='([\d.-]+)'")
-_VWAY  = re.compile(rb"<way id='(\d+)'")
-_VND   = re.compile(rb"<nd ref='(\d+)'")
-_VTAG  = re.compile(rb"<tag k='([^']+)' v='([^']+)'")
+_Q    = rb"""['"]"""
+_VNODE = re.compile(rb"""<node\s+id=""" + _Q + rb"""(\d+)""" + _Q + rb"""[^>]+lat=""" + _Q + rb"""([\d.-]+)""" + _Q + rb"""[^>]+lon=""" + _Q + rb"""([\d.-]+)""" + _Q)
+_VWAY  = re.compile(rb"""<way\s+id=""" + _Q + rb"""(\d+)""" + _Q)
+_VND   = re.compile(rb"""<nd\s+ref=""" + _Q + rb"""(\d+)""" + _Q)
+_VTAG  = re.compile(rb"""<tag\s+k=""" + _Q + rb"""([^'"]+)""" + _Q + rb"""\s+v=""" + _Q + rb"""([^'"]+)""" + _Q)
+_VLOCAL_X = re.compile(rb"""local_x""")
+_VLOCAL_Y = re.compile(rb"""local_y""")
 
 # way type → uint8 코드 (프론트엔드 색상표와 동기화)
 _VTYPE_MAP = {
@@ -1026,6 +1029,12 @@ def _parse_vmap_bg(path: str, key: str) -> None:
         # 좌표 변환기 결정 (MGRS or UTM52)
         transformer, mgrs_origin = _get_vmap_transformer(path)
 
+        # local_x/local_y 파싱용 상태
+        in_node = False
+        cur_nid = None
+        cur_x = cur_y = 0.0
+        cur_lx = cur_ly = None   # local_x/local_y 태그값 (있으면 lat/lon 변환 대체)
+
         with open(path, 'rb') as fh:
             for line in fh:
                 n_lines += 1
@@ -1036,18 +1045,45 @@ def _parse_vmap_bg(path: str, key: str) -> None:
                         _vmap_cache[key]['message'] = f'노드 {len(nodes):,}개 읽는 중...'
 
                 if b'<node' in line:
+                    # 이전 node 커밋
+                    if in_node and cur_nid is not None:
+                        nodes[cur_nid] = (cur_lx if cur_lx is not None else cur_x,
+                                          cur_ly if cur_ly is not None else cur_y)
                     m = _VNODE.search(line)
                     if m:
-                        nid = int(m.group(1))
+                        cur_nid = int(m.group(1))
                         lat, lon = float(m.group(2)), float(m.group(3))
                         if transformer:
-                            x, y = transformer.transform(lon, lat)
-                            if mgrs_origin:           # MGRS: 그리드 원점 빼기
-                                x -= mgrs_origin[0]
-                                y -= mgrs_origin[1]
+                            cx, cy = transformer.transform(lon, lat)
+                            if mgrs_origin:
+                                cx -= mgrs_origin[0]; cy -= mgrs_origin[1]
                         else:
-                            x, y = lon, lat
-                        nodes[nid] = (x, y)
+                            cx, cy = lon, lat
+                        cur_x, cur_y = cx, cy
+                        cur_lx = cur_ly = None
+                        in_node = True
+                        if b'/>' in line:   # self-closing <node ... />
+                            nodes[cur_nid] = (cur_x, cur_y)
+                            in_node = False; cur_nid = None
+                    else:
+                        in_node = False
+
+                elif in_node and b'<tag' in line:
+                    m = _VTAG.search(line)
+                    if m:
+                        k = m.group(1)
+                        if k == b'local_x':
+                            try: cur_lx = float(m.group(2))
+                            except ValueError: pass
+                        elif k == b'local_y':
+                            try: cur_ly = float(m.group(2))
+                            except ValueError: pass
+
+                elif b'</node>' in line:
+                    if in_node and cur_nid is not None:
+                        nodes[cur_nid] = (cur_lx if cur_lx is not None else cur_x,
+                                          cur_ly if cur_ly is not None else cur_y)
+                    in_node = False; cur_nid = None
 
                 elif b'<way ' in line:
                     m = _VWAY.search(line)
