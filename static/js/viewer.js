@@ -924,11 +924,18 @@ export class Viewer {
             onProgress,
             onDone: (segCount) => {
                 this._dirty = true;
-                // PCD 없이 벡터맵만 로드한 경우 카메라를 맵 중심으로 이동
+                // PCD 없이 벡터맵만 로드한 경우 → bounding box 기반으로 카메라 자동 맞춤
                 if (!this.coordOffset && this.vmapLayer._group) {
-                    this.camera.position.set(0, -500, 500);
-                    this.camera.lookAt(0, 0, 0);
-                    if (this.controls) { this.controls.target.set(0, 0, 0); this.controls.update(); }
+                    const box = new THREE.Box3().setFromObject(this.vmapLayer._group);
+                    const center = new THREE.Vector3();
+                    box.getCenter(center);
+                    const size = new THREE.Vector3();
+                    box.getSize(size);
+                    const maxDim = Math.max(size.x, size.y, 1);
+                    const dist = maxDim / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))) * 1.3;
+                    this.camera.position.set(center.x, center.y, dist);
+                    this.camera.lookAt(center);
+                    if (this.controls) { this.controls.target.copy(center); this.controls.update(); }
                 }
                 onDone?.(segCount);
             },
