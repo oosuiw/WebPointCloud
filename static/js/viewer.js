@@ -58,7 +58,6 @@ export class Viewer {
         this.coordOffset = null;      // Float64Array([ox,oy,oz]) — add back for original coords
         this.pointCloud = null;
         this.gaussianSplat = null;
-        this.vmapLayer = new VectorMapLayer(this.scene);
         this.pointSize = 0.05;
         this.colorMode = 'intensity';
         this.gamma = 0.6;
@@ -68,6 +67,7 @@ export class Viewer {
 
         // Scene
         this.scene = new THREE.Scene();
+        this.vmapLayer = new VectorMapLayer(this.scene);
         this.scene.background = new THREE.Color(0x0d0d1a);
 
         // Camera (Z-up)
