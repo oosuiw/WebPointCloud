@@ -28,6 +28,61 @@ export function initVectorMapUI(viewer) {
     $('btn-vmap-modal-close')?.addEventListener('click', closeModal);
     modal?.addEventListener('click', e => { if (e.target === modal) closeModal(); });
 
+    // ── 파일 업로드 ────────────────────────────────────
+    $('btn-vmap-upload')?.addEventListener('click', () => $('vmap-file-input').click());
+    $('vmap-file-input')?.addEventListener('change', e => {
+        const file = e.target.files[0];
+        e.target.value = '';
+        if (!file) return;
+        closeModal();
+        uploadAndLoad(file);
+    });
+
+    async function uploadAndLoad(file) {
+        setStatus('업로드 중...', 'parsing');
+        setProgress(5, '파일 업로드 중...');
+        appendLog(`Vector Map 업로드: ${file.name}`, 'info');
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        let json;
+        try {
+            const resp = await fetch('/api/vectormap/load', { method: 'POST', body: formData });
+            json = await resp.json();
+        } catch (e) {
+            setStatus('오류', 'error');
+            setProgress(0, '');
+            showToast(`업로드 실패: ${e.message}`, 'error');
+            return;
+        }
+        if (json.error) {
+            setStatus('오류', 'error');
+            setProgress(0, '');
+            showToast(`오류: ${json.error}`, 'error');
+            return;
+        }
+
+        // 파싱 완료될 때까지 polling → binary 수신
+        viewer.loadVectorMap(null, {
+            _key: json.key,
+            _status: json.status,
+            onProgress(pct, msg) { setProgress(pct, msg); },
+            onDone(segCount) {
+                setProgress(0, '');
+                setStatus(`${segCount.toLocaleString()} segs`, 'ready');
+                showToast(`Vector Map 로드 완료 — ${segCount.toLocaleString()} 세그먼트`, 'success');
+                appendLog(`Vector Map 완료 — ${segCount.toLocaleString()} segs`, 'info');
+            },
+            onError(e) {
+                setProgress(0, '');
+                setStatus('오류', 'error');
+                showToast(`Vector Map 오류: ${e.message}`, 'error');
+                appendLog(`Vector Map 오류: ${e.message}`, 'error');
+            },
+        });
+    }
+
     // ── 디렉토리 브라우저 ────────────────────────────────
     async function browse(dir) {
         fileList.innerHTML = '<div style="color:var(--text-dim);padding:12px">로딩 중...</div>';

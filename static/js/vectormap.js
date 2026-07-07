@@ -27,24 +27,30 @@ export class VectorMapLayer {
     get isLoaded() { return this._group !== null; }
 
     // ── 로드 ────────────────────────────────────────────
-    async load(osmPath, coordOffset, { onProgress, onDone, onError } = {}) {
+    async load(osmPath, coordOffset, { _key, _status, onProgress, onDone, onError } = {}) {
         this.clear();
 
-        // 1) 파싱 요청
-        let resp, json;
-        try {
-            resp = await fetch('/api/vectormap/load', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path: osmPath }),
-            });
-            json = await resp.json();
-        } catch (e) { onError?.(e); return; }
-        if (json.error) { onError?.(new Error(json.error)); return; }
-        this._key = json.key;
+        // 1) 파싱 요청 (업로드로 이미 key를 받은 경우 skip)
+        let initStatus = _status || 'idle';
+        if (_key) {
+            this._key = _key;
+        } else {
+            let resp, json;
+            try {
+                resp = await fetch('/api/vectormap/load', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: osmPath }),
+                });
+                json = await resp.json();
+            } catch (e) { onError?.(e); return; }
+            if (json.error) { onError?.(new Error(json.error)); return; }
+            this._key = json.key;
+            initStatus = json.status;
+        }
 
         // 2) polling
-        if (json.status !== 'ready') {
+        if (initStatus !== 'ready') {
             try { await this._poll(onProgress); }
             catch (e) { onError?.(e); return; }
         }

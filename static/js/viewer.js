@@ -919,8 +919,9 @@ export class Viewer {
     }
 
     // ── Vector Map ────────────────────────────────────────
-    loadVectorMap(osmPath, { onProgress, onDone, onError } = {}) {
+    loadVectorMap(osmPath, { _key, _status, onProgress, onDone, onError } = {}) {
         this.vmapLayer.load(osmPath, this.coordOffset, {
+            _key, _status,
             onProgress,
             onDone: (segCount) => {
                 this._dirty = true;

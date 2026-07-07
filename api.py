@@ -1011,7 +1011,7 @@ _VTYPE_MAP = {
 }
 
 
-def _parse_vmap_bg(path: str, key: str) -> None:
+def _parse_vmap_bg(path: str, key: str, tmp_path: str = None) -> None:
     """백그라운드 파싱 — Lanelet2 OSM → Float32 세그먼트 배열 (type별 색상)"""
     try:
         file_size = os.path.getsize(path)
@@ -1160,6 +1160,10 @@ def _parse_vmap_bg(path: str, key: str) -> None:
     except Exception as exc:
         with _vmap_cache_lock:
             _vmap_cache[key] = {'status': 'error', 'progress': 0, 'message': str(exc)}
+    finally:
+        if tmp_path:
+            try: os.unlink(tmp_path)
+            except: pass
 
 
 @api_bp.route('/api/vectormap/browse')
@@ -1205,34 +1209,53 @@ def vmap_browse():
 
 @api_bp.route('/api/vectormap/load', methods=['POST'])
 def vmap_load():
-    err = _require_json()
-    if err:
-        return err
-    path = (request.json.get('path') or '').strip()
-    if not path:
-        return jsonify({'error': 'path required'}), 400
-
-    real_path = os.path.realpath(path)
-    if not os.path.isfile(real_path):
-        return jsonify({'error': 'file not found'}), 404
-    if not real_path.endswith('.osm'):
-        return jsonify({'error': '.osm 파일만 지원합니다'}), 400
     if not _HAS_PYPROJ:
         return jsonify({'error': 'pyproj not installed — pip install pyproj'}), 500
 
-    key = hashlib.md5(real_path.encode()).hexdigest()[:16]
+    tmp_path = None
+
+    # ── 파일 업로드 방식 ──
+    if 'file' in request.files:
+        f = request.files['file']
+        if not (f.filename or '').lower().endswith('.osm'):
+            return jsonify({'error': '.osm 파일만 지원합니다'}), 400
+        import tempfile
+        fd, tmp_path = tempfile.mkstemp(suffix='.osm')
+        os.close(fd)
+        f.save(tmp_path)
+        real_path = tmp_path
+        key = hashlib.md5(f.filename.encode() + str(os.path.getsize(tmp_path)).encode()).hexdigest()[:16]
+    # ── 경로 지정 방식 ──
+    else:
+        if not request.is_json:
+            return jsonify({'error': 'JSON or file upload required'}), 400
+        path = (request.json.get('path') or '').strip()
+        if not path:
+            return jsonify({'error': 'path required'}), 400
+        real_path = os.path.realpath(path)
+        if not os.path.isfile(real_path):
+            return jsonify({'error': 'file not found'}), 404
+        if not real_path.endswith('.osm'):
+            return jsonify({'error': '.osm 파일만 지원합니다'}), 400
+        key = hashlib.md5(real_path.encode()).hexdigest()[:16]
 
     with _vmap_cache_lock:
         st = _vmap_cache.get(key, {}).get('status', 'idle')
 
     if st == 'ready':
+        if tmp_path:
+            try: os.unlink(tmp_path)
+            except: pass
         return jsonify({'key': key, 'status': 'ready'})
     if st == 'parsing':
+        if tmp_path:
+            try: os.unlink(tmp_path)
+            except: pass
         return jsonify({'key': key, 'status': 'parsing'})
 
     with _vmap_cache_lock:
         _vmap_cache[key] = {'status': 'parsing', 'progress': 0, 'message': '파싱 시작...'}
-    threading.Thread(target=_parse_vmap_bg, args=(real_path, key), daemon=True).start()
+    threading.Thread(target=_parse_vmap_bg, args=(real_path, key, tmp_path), daemon=True).start()
     return jsonify({'key': key, 'status': 'parsing'})
 
 

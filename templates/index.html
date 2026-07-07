@@ -376,8 +376,12 @@
             <button class="modal-close" id="btn-vmap-modal-close">&times;</button>
         </div>
         <div class="modal-body">
+            <div style="display:flex;gap:8px;margin-bottom:8px">
+                <button class="btn primary" id="btn-vmap-upload">Upload File</button>
+                <input type="file" id="vmap-file-input" accept=".osm" hidden>
+            </div>
             <div class="vmap-breadcrumb" id="vmap-breadcrumb"></div>
-            <div id="vmap-file-list" class="scroll-list" style="max-height:55vh"></div>
+            <div id="vmap-file-list" class="scroll-list" style="max-height:50vh"></div>
         </div>
     </div>
 </div>
