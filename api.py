@@ -1029,11 +1029,11 @@ def _parse_vmap_bg(path: str, key: str) -> None:
         # 좌표 변환기 결정 (MGRS or UTM52)
         transformer, mgrs_origin = _get_vmap_transformer(path)
 
-        # local_x/local_y 파싱용 상태
+        # local_x/local_y/ele 파싱용 상태
         in_node = False
         cur_nid = None
         cur_x = cur_y = 0.0
-        cur_lx = cur_ly = None   # local_x/local_y 태그값 (있으면 lat/lon 변환 대체)
+        cur_lx = cur_ly = cur_lz = None   # local_x/local_y/ele 태그값
 
         with open(path, 'rb') as fh:
             for line in fh:
@@ -1060,10 +1060,10 @@ def _parse_vmap_bg(path: str, key: str) -> None:
                         else:
                             cx, cy = lon, lat
                         cur_x, cur_y = cx, cy
-                        cur_lx = cur_ly = None
+                        cur_lx = cur_ly = cur_lz = None
                         in_node = True
                         if b'/>' in line:   # self-closing <node ... />
-                            nodes[cur_nid] = (cur_x, cur_y)
+                            nodes[cur_nid] = (cur_x, cur_y, 0.0)
                             in_node = False; cur_nid = None
                     else:
                         in_node = False
@@ -1078,11 +1078,17 @@ def _parse_vmap_bg(path: str, key: str) -> None:
                         elif k == b'local_y':
                             try: cur_ly = float(m.group(2))
                             except ValueError: pass
+                        elif k in (b'ele', b'local_z'):
+                            try: cur_lz = float(m.group(2))
+                            except ValueError: pass
 
                 elif b'</node>' in line:
                     if in_node and cur_nid is not None:
-                        nodes[cur_nid] = (cur_lx if cur_lx is not None else cur_x,
-                                          cur_ly if cur_ly is not None else cur_y)
+                        nodes[cur_nid] = (
+                            cur_lx if cur_lx is not None else cur_x,
+                            cur_ly if cur_ly is not None else cur_y,
+                            cur_lz if cur_lz is not None else 0.0,
+                        )
                     in_node = False; cur_nid = None
 
                 elif b'<way ' in line:
@@ -1113,10 +1119,12 @@ def _parse_vmap_bg(path: str, key: str) -> None:
         if nodes:
             xs = [v[0] for v in nodes.values()]
             ys = [v[1] for v in nodes.values()]
+            zs = [v[2] for v in nodes.values()]
             ox = float(np.mean(xs))
             oy = float(np.mean(ys))
+            oz = float(np.mean(zs))
         else:
-            ox = oy = 0.0
+            ox = oy = oz = 0.0
 
         # 세그먼트 배열 구성
         pos_rows, type_rows = [], []
@@ -1126,9 +1134,9 @@ def _parse_vmap_bg(path: str, key: str) -> None:
                 r0, r1 = refs[i], refs[i + 1]
                 if r0 not in nodes or r1 not in nodes:
                     continue
-                x0, y0 = nodes[r0]
-                x1, y1 = nodes[r1]
-                pos_rows.append((x0 - ox, y0 - oy, 0.0, x1 - ox, y1 - oy, 0.0))
+                x0, y0, z0 = nodes[r0]
+                x1, y1, z1 = nodes[r1]
+                pos_rows.append((x0 - ox, y0 - oy, z0 - oz, x1 - ox, y1 - oy, z1 - oz))
                 type_rows.append(tcode)
 
         del nodes, ways
@@ -1144,7 +1152,7 @@ def _parse_vmap_bg(path: str, key: str) -> None:
                 'data': {
                     'positions': positions,
                     'types':     types_arr,
-                    'offset':    [ox, oy, 0.0],
+                    'offset':    [ox, oy, oz],
                     'seg_count': len(pos_rows),
                 },
             }
@@ -1270,7 +1278,8 @@ def vmap_data(key):
             'X-Seg-Count':  str(data['seg_count']),
             'X-Offset-X':   str(data['offset'][0]),
             'X-Offset-Y':   str(data['offset'][1]),
-            'Access-Control-Expose-Headers': 'X-Seg-Count,X-Offset-X,X-Offset-Y',
+            'X-Offset-Z':   str(data['offset'][2]),
+            'Access-Control-Expose-Headers': 'X-Seg-Count,X-Offset-X,X-Offset-Y,X-Offset-Z',
         },
     )
 

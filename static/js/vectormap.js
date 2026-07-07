@@ -21,6 +21,7 @@ export class VectorMapLayer {
         this._visible   = true;
         this._zOffset   = 0.0;
         this._dark      = true;
+        this._baseZ     = 0.0;   // vmapOz - coordOffset[2] (고도 정렬 기준)
     }
 
     get isLoaded() { return this._group !== null; }
@@ -58,6 +59,7 @@ export class VectorMapLayer {
         const segCount  = parseInt(binResp.headers.get('X-Seg-Count') || '0');
         const vmapOx    = parseFloat(binResp.headers.get('X-Offset-X') || '0');
         const vmapOy    = parseFloat(binResp.headers.get('X-Offset-Y') || '0');
+        const vmapOz    = parseFloat(binResp.headers.get('X-Offset-Z') || '0');
         const buf       = await binResp.arrayBuffer();
         const posBytes  = segCount * 6 * 4;
         const positions = new Float32Array(buf, 0, segCount * 6);
@@ -66,10 +68,11 @@ export class VectorMapLayer {
         this._buildMesh(positions, types, segCount);
 
         // PCD coordOffset이 있으면 벡터맵 group을 PCD 좌표계에 정렬
-        // (같은 지역이면 dx≈0, 다른 지역이면 그룹 전체가 해당 위치로 이동)
         if (coordOffset && this._group) {
+            this._baseZ = vmapOz - coordOffset[2];
             this._group.position.x = vmapOx - coordOffset[0];
             this._group.position.y = vmapOy - coordOffset[1];
+            this._group.position.z = this._baseZ + this._zOffset;
         }
 
         onDone?.(segCount, { vmapOx, vmapOy });
@@ -146,7 +149,7 @@ export class VectorMapLayer {
 
     setZOffset(z) {
         this._zOffset = z;
-        if (this._group) this._group.position.z = z;
+        if (this._group) this._group.position.z = this._baseZ + z;
     }
 
     // ── 해제 ────────────────────────────────────────────
