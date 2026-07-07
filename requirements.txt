@@ -3,3 +3,5 @@ numpy==1.26.4
 laspy[lazrs]==2.5.4
 scipy>=1.11.0
 pyproj>=3.4.0
+mgrs>=1.4.0
+PyYAML>=6.0

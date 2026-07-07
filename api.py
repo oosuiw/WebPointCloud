@@ -23,6 +23,45 @@ try:
 except ImportError:
     _HAS_PYPROJ = False
 
+try:
+    import mgrs as _mgrs_lib
+    _mgrs_conv = _mgrs_lib.MGRS()
+    _HAS_MGRS = True
+except ImportError:
+    _HAS_MGRS = False
+
+try:
+    import yaml as _yaml
+    _HAS_YAML = True
+except ImportError:
+    _HAS_YAML = False
+
+
+def _get_vmap_transformer(osm_path: str):
+    """OSM 파일 경로에서 좌표 변환 함수 결정.
+    map_projector_info.yaml이 있으면 MGRS 변환, 없으면 EPSG:32652."""
+    if not _HAS_PYPROJ:
+        return None, None
+
+    yaml_path = os.path.join(os.path.dirname(osm_path), 'map_projector_info.yaml')
+    if _HAS_YAML and _HAS_MGRS and os.path.isfile(yaml_path):
+        try:
+            with open(yaml_path) as f:
+                info = _yaml.safe_load(f)
+            if info.get('projector_type') == 'MGRS':
+                mgrs_grid = info.get('mgrs_grid', '')
+                if mgrs_grid:
+                    # 그리드 원점의 lat/lon → UTM Zone 좌표
+                    orig_lat, orig_lon = _mgrs_conv.toLatLon(mgrs_grid + '0000000000')
+                    zone = int((orig_lon + 180) / 6) + 1
+                    epsg = 32600 + zone if orig_lat >= 0 else 32700 + zone
+                    t = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+                    origin_utm = t.transform(orig_lon, orig_lat)
+                    return t, origin_utm
+        except Exception:
+            pass
+    return _wgs2utm52, None
+
 api_bp = Blueprint('api', __name__)
 
 # ── Per-map file locks for concurrent operations ──
@@ -984,6 +1023,9 @@ def _parse_vmap_bg(path: str, key: str) -> None:
         with _vmap_cache_lock:
             _vmap_cache[key] = {'status': 'parsing', 'progress': 5, 'message': '노드 읽는 중...'}
 
+        # 좌표 변환기 결정 (MGRS or UTM52)
+        transformer, mgrs_origin = _get_vmap_transformer(path)
+
         with open(path, 'rb') as fh:
             for line in fh:
                 n_lines += 1
@@ -998,8 +1040,11 @@ def _parse_vmap_bg(path: str, key: str) -> None:
                     if m:
                         nid = int(m.group(1))
                         lat, lon = float(m.group(2)), float(m.group(3))
-                        if _HAS_PYPROJ:
-                            x, y = _wgs2utm52.transform(lon, lat)
+                        if transformer:
+                            x, y = transformer.transform(lon, lat)
+                            if mgrs_origin:           # MGRS: 그리드 원점 빼기
+                                x -= mgrs_origin[0]
+                                y -= mgrs_origin[1]
                         else:
                             x, y = lon, lat
                         nodes[nid] = (x, y)
