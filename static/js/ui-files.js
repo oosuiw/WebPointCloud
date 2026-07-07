@@ -39,19 +39,24 @@ export function initFileManagement(viewer, legend, deps, uiState) {
     // Upload
     $('btn-upload').addEventListener('click', () => $('file-input').click());
     $('file-input').addEventListener('change', async e => {
-        const file = e.target.files[0];
-        if (!file) return;
+        const files = Array.from(e.target.files);
+        e.target.value = '';
+        if (files.length === 0) return;
+
         // UX-4: File size validation (5 GB matches server MAX_CONTENT_LENGTH)
         const MAX_UPLOAD_SIZE = 5 * 1024 * 1024 * 1024;
-        if (file.size > MAX_UPLOAD_SIZE) {
-            showToast(`File too large (${formatFileSize(file.size)}). Maximum upload size is 5 GB.`, 'error');
-            e.target.value = '';
-            return;
+        for (const f of files) {
+            if (f.size > MAX_UPLOAD_SIZE) {
+                showToast(`File too large (${formatFileSize(f.size)}). Maximum upload size is 5 GB.`, 'error');
+                return;
+            }
         }
+
         const isCompare = uiState.compareMode === 'compare';
         closeModal();
 
         if (isCompare) {
+            const file = files[0];
             $('st-main').textContent = `Uploading compare map: ${file.name}...`;
             showLoading(`Loading compare map...`);
             try {
@@ -73,36 +78,80 @@ export function initFileManagement(viewer, legend, deps, uiState) {
             } finally {
                 hideLoading();
             }
-        } else {
-            $('st-main').textContent = `Uploading ${file.name} (${formatFileSize(file.size)})...`;
-            showLoading(`Loading ${file.name}...`);
-            try {
-                const data = await uploadLasFile(file, pct => {
-                    $('st-main').textContent = `Uploading ${file.name}... ${pct}%`;
-                });
-                if (data.type === 'gaussian') {
-                    viewer.loadGaussianSplat(data);
-                } else {
-                    viewer.loadPointCloud(data);
-                }
-                legend.update(viewer.colorMode, data.bounds, data.offset ? data.offset[2] : 0);
-                if (data.savedPath) {
-                    const { setCurrentPath } = await import('./analysis.js');
-                    setCurrentPath(data.savedPath);
-                }
-                $('compare-a-name').textContent = file.name;
-                $('no-data-msg').style.display = 'none';
-                const label = data.type === 'gaussian' ? 'gaussians' : 'points';
-                $('st-main').textContent = `Loaded ${data.numPoints.toLocaleString()} ${label}`;
-                appendLog(`Loaded ${file.name} (${data.numPoints.toLocaleString()} ${label})`, 'success');
-            } catch (err) {
-                $('st-main').textContent = `Error: ${err.message}`;
-                showToast(`Failed: ${err.message}`, 'error');
-            } finally {
-                hideLoading();
+            return;
+        }
+
+        // 첫 번째 파일: 메인 Point Cloud로 로드 (기존과 동일하게 교체)
+        const [firstFile, ...restFiles] = files;
+        $('st-main').textContent = `Uploading ${firstFile.name} (${formatFileSize(firstFile.size)})...`;
+        showLoading(`Loading ${firstFile.name}...`);
+        try {
+            const data = await uploadLasFile(firstFile, pct => {
+                $('st-main').textContent = `Uploading ${firstFile.name}... ${pct}%`;
+            });
+            if (data.type === 'gaussian') {
+                viewer.loadGaussianSplat(data);
+            } else {
+                viewer.loadPointCloud(data);
             }
+            legend.update(viewer.colorMode, data.bounds, data.offset ? data.offset[2] : 0);
+            if (data.savedPath) {
+                const { setCurrentPath } = await import('./analysis.js');
+                setCurrentPath(data.savedPath);
+            }
+            $('compare-a-name').textContent = firstFile.name;
+            $('no-data-msg').style.display = 'none';
+            const label = data.type === 'gaussian' ? 'gaussians' : 'points';
+            $('st-main').textContent = `Loaded ${data.numPoints.toLocaleString()} ${label}`;
+            appendLog(`Loaded ${firstFile.name} (${data.numPoints.toLocaleString()} ${label})`, 'success');
+        } catch (err) {
+            $('st-main').textContent = `Error: ${err.message}`;
+            showToast(`Failed: ${err.message}`, 'error');
+        } finally {
+            hideLoading();
+        }
+
+        // 나머지 파일들: 좌표 기준으로 정렬된 추가 레이어로 로드
+        for (const f of restFiles) {
+            await addExtraCloudFile(f);
         }
     });
+
+    async function addExtraCloudFile(file) {
+        appendLog(`Point Cloud 추가 로드: ${file.name}`, 'info');
+        try {
+            const data = await uploadLasFile(file, pct => {
+                $('st-main').textContent = `Uploading ${file.name}... ${pct}%`;
+            });
+            if (data.type === 'gaussian') {
+                showToast(`${file.name}: Gaussian Splat은 추가 레이어로 지원하지 않습니다.`, 'error');
+                return;
+            }
+            const entry = viewer.addPointCloud(data);
+            addExtraCloudListItem(file.name, data.numPoints, entry);
+            showToast(`${file.name} 추가 완료 (${data.numPoints.toLocaleString()} pts)`, 'success');
+            appendLog(`추가 완료 — ${file.name} (${data.numPoints.toLocaleString()} pts)`, 'success');
+        } catch (err) {
+            showToast(`${file.name} 추가 실패: ${err.message}`, 'error');
+            appendLog(`Point Cloud 추가 오류: ${file.name} — ${err.message}`, 'error');
+        }
+    }
+
+    function addExtraCloudListItem(name, numPoints, entry) {
+        const list = $('extra-cloud-list');
+        if (!list) return;
+        const item = document.createElement('div');
+        item.className = 'vmap-layer-item';
+        item.innerHTML = `
+            <span class="vmap-item-name" title="${name}">${name}</span>
+            <span class="vmap-item-meta">${numPoints.toLocaleString()} pts</span>
+            <button class="vmap-item-remove" title="제거">&times;</button>`;
+        item.querySelector('.vmap-item-remove').addEventListener('click', () => {
+            viewer.removePointCloud(entry);
+            item.remove();
+        });
+        list.appendChild(item);
+    }
 
     // Refresh map list
     async function refreshMapList() {

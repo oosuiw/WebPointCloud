@@ -58,6 +58,7 @@ export class Viewer {
         this.coordOffset = null;      // Float64Array([ox,oy,oz]) — add back for original coords
         this.pointCloud = null;
         this.gaussianSplat = null;
+        this.extraClouds = [];        // { mesh, fullData, dsRatio, rawOffset }[] — 추가로 로드된 PCD
         this.pointSize = 0.05;
         this.colorMode = 'intensity';
         this.gamma = 0.6;
@@ -68,7 +69,7 @@ export class Viewer {
         // Scene
         this.scene = new THREE.Scene();
         this.vmapLayers = [];       // VectorMapLayer[]
-        this._vmapRefOffset = null; // 첫 번째 OSM offset — PCD 없을 때 공통 기준
+        this._geoRefOffset = null;  // 메인 PCD가 없을 때, 가장 먼저 로드된 지오참조 레이어(추가 PCD/OSM)의 offset — 공통 기준
         this.scene.background = new THREE.Color(0x0d0d1a);
 
         // Camera (Z-up)
@@ -379,6 +380,29 @@ export class Viewer {
         this.bounds = data.bounds;
         this.coordOffset = data.offset || null;
 
+        // 이미 로드된 추가 클라우드/벡터맵이 있으면 새 기준 좌표로 재정렬
+        if (this.coordOffset) {
+            this.extraClouds.forEach(e => {
+                if (e.rawOffset) {
+                    e.mesh.position.set(
+                        e.rawOffset[0] - this.coordOffset[0],
+                        e.rawOffset[1] - this.coordOffset[1],
+                        e.rawOffset[2] - this.coordOffset[2],
+                    );
+                }
+            });
+            this.vmapLayers.forEach(l => {
+                if (l._vmapOx !== undefined && l._group) {
+                    l._baseZ = l._vmapOz - this.coordOffset[2];
+                    l._group.position.set(
+                        l._vmapOx - this.coordOffset[0],
+                        l._vmapOy - this.coordOffset[1],
+                        l._baseZ + l._zOffset,
+                    );
+                }
+            });
+        }
+
         // B-3: reset undo/redo stacks on map switch (prevent memory leak)
         this._undoStack.length = 0;
         this._redoStack.length = 0;
@@ -419,6 +443,55 @@ export class Viewer {
         if (dsLabel) { dsLabel.textContent = '100%'; }
 
         this._fitCamera();
+        this.updateStats();
+        this._dirty = true;
+    }
+
+    /* ── 추가 PCD 레이어 (메인은 대체하지 않고 별도로 로드) ── */
+    addPointCloud(data) {
+        if (this._webglFailed) return null;
+
+        const rawOffset = data.offset || [0, 0, 0];
+        // 기준 좌표가 아직 없으면(메인 PCD도, 다른 지오참조 레이어도 없음) 이 클라우드를 기준으로 등록
+        if (!this.coordOffset && !this._geoRefOffset) {
+            this._geoRefOffset = rawOffset;
+        }
+        const ref = this.coordOffset || this._geoRefOffset;
+
+        const display = this._downsampleData(data, 1.0);
+        const mat = this._makeMaterial();
+        const mesh = new THREE.Points(this._buildGeometry(display), mat);
+        mesh.frustumCulled = false;
+        this._syncColorUniforms(mesh);
+        mat.uniforms.uPointSize.value = this.pointSize;
+        if (ref) {
+            mesh.position.set(rawOffset[0] - ref[0], rawOffset[1] - ref[1], rawOffset[2] - ref[2]);
+        }
+        this.scene.add(mesh);
+
+        const entry = { mesh, fullData: data, dsRatio: 1.0, rawOffset };
+        this.extraClouds.push(entry);
+        this.updateStats();
+        this._dirty = true;
+        return entry;
+    }
+
+    removePointCloud(entry) {
+        this.scene.remove(entry.mesh);
+        entry.mesh.geometry.dispose();
+        entry.mesh.material.dispose();
+        this.extraClouds = this.extraClouds.filter(e => e !== entry);
+        this.updateStats();
+        this._dirty = true;
+    }
+
+    clearExtraClouds() {
+        this.extraClouds.forEach(e => {
+            this.scene.remove(e.mesh);
+            e.mesh.geometry.dispose();
+            e.mesh.material.dispose();
+        });
+        this.extraClouds = [];
         this.updateStats();
         this._dirty = true;
     }
@@ -478,6 +551,7 @@ export class Viewer {
         this._syncColorUniforms(this.pointCloud);
         this._syncColorUniforms(this.mapCloud);
         this.kfrmClouds.forEach(c => this._syncColorUniforms(c));
+        this.extraClouds.forEach(e => this._syncColorUniforms(e.mesh));
         this._dirty = true;
     }
 
@@ -486,6 +560,7 @@ export class Viewer {
         if (this.pointCloud) this.pointCloud.material.uniforms.uGamma.value = g;
         if (this.mapCloud)   this.mapCloud.material.uniforms.uGamma.value = g;
         this.kfrmClouds.forEach(c => { c.material.uniforms.uGamma.value = g; });
+        this.extraClouds.forEach(e => { e.mesh.material.uniforms.uGamma.value = g; });
         this._dirty = true;
     }
 
@@ -498,6 +573,7 @@ export class Viewer {
         this.kfrmClouds.forEach(c => { c.material.uniforms.uPointSize.value = s; });
         if (this.kf0Cloud) this.kf0Cloud.material.uniforms.uPointSize.value = s * 3.0;
         if (this.kf1Cloud) this.kf1Cloud.material.uniforms.uPointSize.value = s * 3.0;
+        this.extraClouds.forEach(e => { e.mesh.material.uniforms.uPointSize.value = s; });
         this._dirty = true;
     }
 
@@ -561,6 +637,24 @@ export class Viewer {
                 ? `Points: ${display.numPoints.toLocaleString()} / ${full.toLocaleString()}`
                 : `Points: ${full.toLocaleString()}`;
         }
+
+        // 추가 클라우드도 동일 비율로 재구성 (설정은 하나처럼 동작)
+        this.extraClouds.forEach(e => {
+            e.dsRatio = ratio;
+            const d = this._downsampleData(e.fullData, ratio);
+            const pos = e.mesh.position.clone();
+            this.scene.remove(e.mesh);
+            e.mesh.geometry.dispose();
+            e.mesh.material.dispose();
+            const mat2 = this._makeMaterial();
+            const mesh = new THREE.Points(this._buildGeometry(d), mat2);
+            mesh.frustumCulled = false;
+            mesh.position.copy(pos);
+            this._syncColorUniforms(mesh);
+            this.scene.add(mesh);
+            e.mesh = mesh;
+        });
+
         this.updateStats();
         this._dirty = true;
     }
@@ -907,6 +1001,7 @@ export class Viewer {
         if (layer === 'map') {
             if (this.pointCloud) { this.pointCloud.visible = show; }
             if (this.mapCloud) { this.mapCloud.visible = show; }
+            this.extraClouds.forEach(e => { e.mesh.visible = show; });
         } else if (layer === 'kfrm') {
             this.kfrmClouds.forEach(c => { c.visible = show; });
         } else if (layer === 'vectormap') {
@@ -923,17 +1018,17 @@ export class Viewer {
     loadVectorMap(osmPath, { _key, _status, onProgress, onDone, onError } = {}) {
         const layer = new VectorMapLayer(this.scene);
         this.vmapLayers.push(layer);
-        // PCD coordOffset → PCD 기준 정렬
-        // 그 외 → 첫 번째 OSM offset을 공통 기준으로 사용 (없으면 null → 자체 중심)
-        const refOffset = this.coordOffset || this._vmapRefOffset;
+        // 메인 PCD coordOffset → 그 기준 정렬
+        // 그 외 → 가장 먼저 로드된 지오참조 레이어(추가 PCD 포함) offset을 공통 기준으로 사용
+        const refOffset = this.coordOffset || this._geoRefOffset;
         layer.load(osmPath, refOffset, {
             _key, _status,
             onProgress,
             onDone: (segCount) => {
                 this._dirty = true;
-                // PCD 없고 기준 offset 미설정이면 → 이 레이어를 기준으로 등록
-                if (!this.coordOffset && !this._vmapRefOffset && layer._vmapOx !== undefined) {
-                    this._vmapRefOffset = [layer._vmapOx, layer._vmapOy, layer._vmapOz || 0];
+                // 기준이 아직 없으면 → 이 레이어를 기준으로 등록
+                if (!this.coordOffset && !this._geoRefOffset && layer._vmapOx !== undefined) {
+                    this._geoRefOffset = [layer._vmapOx, layer._vmapOy, layer._vmapOz || 0];
                 }
                 // PCD도 없고 첫 번째 OSM일 때만 카메라 fit
                 if (!this.coordOffset && !refOffset && layer._group) {
@@ -1461,6 +1556,7 @@ export class Viewer {
         if (this.rawCloud) total += dc(this.rawCloud.geometry);
         if (this.curCloud) total += dc(this.curCloud.geometry);
         for (const c of this.kfrmClouds) total += dc(c.geometry);
+        for (const e of this.extraClouds) total += dc(e.mesh.geometry);
         const ox = this.coordOffset ? this.coordOffset[0] : 0;
         const oy = this.coordOffset ? this.coordOffset[1] : 0;
         const oz = this.coordOffset ? this.coordOffset[2] : 0;
@@ -1469,7 +1565,8 @@ export class Viewer {
             `X: [${(b.xMin+ox).toFixed(1)} ~ ${(b.xMax+ox).toFixed(1)}] ${(b.xMax-b.xMin).toFixed(1)}m\n` +
             `Y: [${(b.yMin+oy).toFixed(1)} ~ ${(b.yMax+oy).toFixed(1)}] ${(b.yMax-b.yMin).toFixed(1)}m\n` +
             `Z: [${(b.zMin+oz).toFixed(1)} ~ ${(b.zMax+oz).toFixed(1)}] ${(b.zMax-b.zMin).toFixed(1)}m\n` +
-            `Keyframes: ${this.kfrmClouds.length}`;
+            `Keyframes: ${this.kfrmClouds.length}` +
+            (this.extraClouds.length ? `\nExtra clouds: ${this.extraClouds.length}` : '');
         el.style.display = 'block';
         if (!this.clipEnabled) {
             const clipMin = document.getElementById('spb-clip-min');

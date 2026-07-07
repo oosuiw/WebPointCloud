@@ -98,6 +98,8 @@
                 <input type="range" id="ds-ratio-slider" min="0.01" max="1" step="0.01" value="1" class="flex-1">
                 <span class="text-mono-sm" id="ds-ratio-label">100%</span>
             </div>
+            <!-- 추가로 로드된 Point Cloud 목록 -->
+            <div id="extra-cloud-list" style="margin-top:4px"></div>
             <hr class="sep">
             <div class="accordion-header" data-accordion="view-postfilter">
                 <div class="sub-label mb-0">Post Filters</div>
@@ -362,7 +364,7 @@
             <div class="ctrl-row mb-6">
                 <button class="btn primary" id="btn-upload">Upload File</button>
                 <input type="text" id="map-search" placeholder="Search saved maps..." class="flex-1">
-                <input type="file" id="file-input" accept=".las,.laz,.ply,.xyz,.txt,.csv,.pcd,.pts,.splat" hidden>
+                <input type="file" id="file-input" accept=".las,.laz,.ply,.xyz,.txt,.csv,.pcd,.pts,.splat" multiple hidden>
             </div>
             <div id="map-list-wrap" class="scroll-list" style="max-height:50vh">
                 <div id="map-list"></div>
