@@ -639,7 +639,9 @@ def _read_pcd(path):
                 s = sizes[i]
                 c = counts[i]
                 for ci in range(c):
-                    name = field if c == 1 else f'{field}_{ci}'
+                    # 필드 인덱스(i)를 이름에 포함 — 동일한 필드명(예: 패딩용 '_')이
+                    # 여러 번 나와도 확장된 이름이 서로 겹치지 않도록 함
+                    name = field if c == 1 else f'{field}_{i}_{ci}'
                     dt_list.append((name, f'<{t}{s}'))
             np_dtype = np.dtype(dt_list)
             data_raw = np.frombuffer(f.read(n * np_dtype.itemsize), dtype=np_dtype, count=n)
@@ -648,7 +650,7 @@ def _read_pcd(path):
             for i, field in enumerate(fields):
                 c = counts[i]
                 for ci in range(c):
-                    expanded_fields.append(field if c == 1 else f'{field}_{ci}')
+                    expanded_fields.append(field if c == 1 else f'{field}_{i}_{ci}')
             raw = np.column_stack([data_raw[name].astype(np.float64) for name in [d[0] for d in dt_list]])
             fields = expanded_fields
         else:
