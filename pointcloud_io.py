@@ -250,27 +250,21 @@ def _read_ply(path):
             data = np.loadtxt(f, max_rows=n)
             if data.ndim == 1:
                 data = data.reshape(1, -1)
-        elif fmt == 'binary_little_endian':
+        elif fmt in ('binary_little_endian', 'binary_big_endian'):
             dtype_map = {
                 'float': 'f4', 'float32': 'f4', 'double': 'f8', 'float64': 'f8',
                 'uchar': 'u1', 'uint8': 'u1', 'char': 'i1', 'int8': 'i1',
                 'ushort': 'u2', 'uint16': 'u2', 'short': 'i2', 'int16': 'i2',
                 'uint': 'u4', 'uint32': 'u4', 'int': 'i4', 'int32': 'i4',
             }
-            np_dtype = np.dtype([(name, '<' + dtype_map.get(dt, 'f4')) for name, dt in props])
+            endian = '<' if fmt == 'binary_little_endian' else '>'
+            # 내부 dtype 이름은 위치 인덱스로 부여 — PLY 속성명이 중복되는
+            # (비표준이지만 실제로 존재하는) 파일에서 numpy dtype 생성이
+            # "field occurs more than once"로 실패하는 것을 방지
+            np_dtype = np.dtype([(f'p{i}', endian + dtype_map.get(dt, 'f4'))
+                                  for i, (name, dt) in enumerate(props)])
             data_raw = np.frombuffer(f.read(n * np_dtype.itemsize), dtype=np_dtype, count=n)
-            # Convert structured array to regular array for uniform access
-            data = np.column_stack([data_raw[name].astype(np.float64) for name in prop_names])
-        elif fmt == 'binary_big_endian':
-            dtype_map = {
-                'float': 'f4', 'float32': 'f4', 'double': 'f8', 'float64': 'f8',
-                'uchar': 'u1', 'uint8': 'u1', 'char': 'i1', 'int8': 'i1',
-                'ushort': 'u2', 'uint16': 'u2', 'short': 'i2', 'int16': 'i2',
-                'uint': 'u4', 'uint32': 'u4', 'int': 'i4', 'int32': 'i4',
-            }
-            np_dtype = np.dtype([(name, '>' + dtype_map.get(dt, 'f4')) for name, dt in props])
-            data_raw = np.frombuffer(f.read(n * np_dtype.itemsize), dtype=np_dtype, count=n)
-            data = np.column_stack([data_raw[name].astype(np.float64) for name in prop_names])
+            data = np.column_stack([data_raw[f'p{i}'].astype(np.float64) for i in range(len(props))])
         else:
             raise ValueError(f'Unsupported PLY format: {fmt}')
 
@@ -627,10 +621,22 @@ def _read_pcd(path):
         if not counts:
             counts = [1] * len(fields)
 
+        # COUNT>1 필드(법선벡터, 패딩용 '_' 등)를 컬럼별로 펼친 이름 목록.
+        # 필드 인덱스(i)를 이름에 포함해, 동일한 필드명(예: 패딩 '_')이 여러 번
+        # 나와도 확장된 이름이 서로 겹치지 않도록 함. ascii/binary 공통으로 사용
+        # (ascii 모드에서도 COUNT>1 필드가 있으면 실제 컬럼 수가 len(fields)보다
+        # 많아지므로, 이 펼치기를 하지 않으면 x/y/z가 엉뚱한 컬럼을 가리키게 됨)
+        expanded_fields = []
+        for i, field in enumerate(fields):
+            c = counts[i]
+            for ci in range(c):
+                expanded_fields.append(field if c == 1 else f'{field}_{i}_{ci}')
+
         if data_mode == 'ascii':
             raw = np.loadtxt(f, max_rows=n)
             if raw.ndim == 1:
                 raw = raw.reshape(1, -1)
+            fields = expanded_fields
         elif data_mode == 'binary':
             type_map = {'F': 'f', 'U': 'u', 'I': 'i'}
             dt_list = []
@@ -639,18 +645,10 @@ def _read_pcd(path):
                 s = sizes[i]
                 c = counts[i]
                 for ci in range(c):
-                    # 필드 인덱스(i)를 이름에 포함 — 동일한 필드명(예: 패딩용 '_')이
-                    # 여러 번 나와도 확장된 이름이 서로 겹치지 않도록 함
                     name = field if c == 1 else f'{field}_{i}_{ci}'
                     dt_list.append((name, f'<{t}{s}'))
             np_dtype = np.dtype(dt_list)
             data_raw = np.frombuffer(f.read(n * np_dtype.itemsize), dtype=np_dtype, count=n)
-            # Flatten to column array
-            expanded_fields = []
-            for i, field in enumerate(fields):
-                c = counts[i]
-                for ci in range(c):
-                    expanded_fields.append(field if c == 1 else f'{field}_{i}_{ci}')
             raw = np.column_stack([data_raw[name].astype(np.float64) for name in [d[0] for d in dt_list]])
             fields = expanded_fields
         else:
