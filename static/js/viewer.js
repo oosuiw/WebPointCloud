@@ -920,7 +920,20 @@ export class Viewer {
 
     // ── Vector Map ────────────────────────────────────────
     loadVectorMap(osmPath, { onProgress, onDone, onError } = {}) {
-        this.vmapLayer.load(osmPath, this.coordOffset, { onProgress, onDone, onError });
+        this.vmapLayer.load(osmPath, this.coordOffset, {
+            onProgress,
+            onDone: (segCount) => {
+                this._dirty = true;
+                // PCD 없이 벡터맵만 로드한 경우 카메라를 맵 중심으로 이동
+                if (!this.coordOffset && this.vmapLayer._group) {
+                    this.camera.position.set(0, -500, 500);
+                    this.camera.lookAt(0, 0, 0);
+                    if (this.controls) { this.controls.target.set(0, 0, 0); this.controls.update(); }
+                }
+                onDone?.(segCount);
+            },
+            onError,
+        });
     }
 
     clearVectorMap() {

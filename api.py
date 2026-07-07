@@ -953,22 +953,31 @@ _vmap_cache_lock = threading.Lock()
 _VNODE = re.compile(rb"<node id='(\d+)'[^>]+lat='([\d.-]+)'[^>]+lon='([\d.-]+)'")
 _VWAY  = re.compile(rb"<way id='(\d+)'")
 _VND   = re.compile(rb"<nd ref='(\d+)'")
+_VTAG  = re.compile(rb"<tag k='([^']+)' v='([^']+)'")
 
-
-def _year_of(nid: int) -> int:
-    if nid < 100_000_000: return 2024
-    if nid < 200_000_000: return 2020
-    return 2019
+# way type → uint8 코드 (프론트엔드 색상표와 동기화)
+_VTYPE_MAP = {
+    b'line_thin':   0,
+    b'line_thick':  0,
+    b'virtual':     1,
+    b'road_border': 2,
+    b'stop_line':   3,
+    b'curbstone':   4,
+    b'guard_rail':  4,
+    b'wall':        4,
+    b'fence':       4,
+}
 
 
 def _parse_vmap_bg(path: str, key: str) -> None:
-    """백그라운드 파싱 — Lanelet2 OSM → Float32 세그먼트 배열."""
+    """백그라운드 파싱 — Lanelet2 OSM → Float32 세그먼트 배열 (type별 색상)"""
     try:
         file_size = os.path.getsize(path)
         nodes: dict[int, tuple] = {}
-        ways:  dict[int, list]  = {}
+        ways:  dict[int, tuple] = {}   # wid → (refs, type_code)
         cur_wid = None
         cur_refs: list = []
+        cur_type: int = 0
         in_way = False
         n_lines = 0
 
@@ -998,7 +1007,12 @@ def _parse_vmap_bg(path: str, key: str) -> None:
                 elif b'<way ' in line:
                     m = _VWAY.search(line)
                     if m:
-                        cur_wid = int(m.group(1)); cur_refs = []; in_way = True
+                        cur_wid = int(m.group(1)); cur_refs = []; cur_type = 0; in_way = True
+
+                elif in_way and b'<tag' in line:
+                    m = _VTAG.search(line)
+                    if m and m.group(1) == b'type':
+                        cur_type = _VTYPE_MAP.get(m.group(2), 0)
 
                 elif b'<nd ' in line and in_way:
                     m = _VND.search(line)
@@ -1007,7 +1021,7 @@ def _parse_vmap_bg(path: str, key: str) -> None:
 
                 elif b'</way>' in line and in_way:
                     if cur_wid is not None:
-                        ways[cur_wid] = cur_refs[:]
+                        ways[cur_wid] = (cur_refs[:], cur_type)
                     in_way = False; cur_wid = None
 
         with _vmap_cache_lock:
@@ -1024,11 +1038,9 @@ def _parse_vmap_bg(path: str, key: str) -> None:
             ox = oy = 0.0
 
         # 세그먼트 배열 구성
-        YEAR_IDX = {2024: 0, 2020: 1, 2019: 2}
-        pos_rows, year_rows = [], []
+        pos_rows, type_rows = [], []
 
-        for wid, refs in ways.items():
-            yr = YEAR_IDX[_year_of(wid)]
+        for wid, (refs, tcode) in ways.items():
             for i in range(len(refs) - 1):
                 r0, r1 = refs[i], refs[i + 1]
                 if r0 not in nodes or r1 not in nodes:
@@ -1036,12 +1048,12 @@ def _parse_vmap_bg(path: str, key: str) -> None:
                 x0, y0 = nodes[r0]
                 x1, y1 = nodes[r1]
                 pos_rows.append((x0 - ox, y0 - oy, 0.0, x1 - ox, y1 - oy, 0.0))
-                year_rows.append(yr)
+                type_rows.append(tcode)
 
         del nodes, ways
 
-        positions = np.array(pos_rows, dtype=np.float32)   # (N, 6)
-        years_arr = np.array(year_rows, dtype=np.uint8)    # (N,)
+        positions  = np.array(pos_rows,  dtype=np.float32)
+        types_arr  = np.array(type_rows, dtype=np.uint8)
 
         with _vmap_cache_lock:
             _vmap_cache[key] = {
@@ -1050,7 +1062,7 @@ def _parse_vmap_bg(path: str, key: str) -> None:
                 'message': f'{len(pos_rows):,} 세그먼트 준비 완료',
                 'data': {
                     'positions': positions,
-                    'years':     years_arr,
+                    'types':     types_arr,
                     'offset':    [ox, oy, 0.0],
                     'seg_count': len(pos_rows),
                 },
@@ -1169,7 +1181,7 @@ def vmap_data(key):
         positions[:, 0] += dx;  positions[:, 3] += dx
         positions[:, 1] += dy;  positions[:, 4] += dy
 
-    buf = positions.tobytes() + data['years'].tobytes()
+    buf = positions.tobytes() + data['types'].tobytes()
     return Response(
         buf,
         mimetype='application/octet-stream',
