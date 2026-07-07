@@ -14,6 +14,19 @@ import { appendLog } from './ui-panels.js';
  */
 export function initViewControls(viewer, legend, deps, uiState) {
 
+    // ── 2D/3D 시점 고정 (헤더) ──
+    const btn2d = $('btn-view-2d');
+    const btn3d = $('btn-view-3d');
+    const selView = $('sel-view');
+    const setDim = (dim) => {
+        viewer.setViewDimension(dim);
+        btn2d.classList.toggle('active', dim === '2d');
+        btn3d.classList.toggle('active', dim === '3d');
+        if (selView) selView.disabled = (dim === '2d');
+    };
+    btn2d?.addEventListener('click', () => setDim('2d'));
+    btn3d?.addEventListener('click', () => setDim('3d'));
+
     // ── Point size ──
     const slider = $('pt-size-slider');
     const spin = $('pt-size-spin');

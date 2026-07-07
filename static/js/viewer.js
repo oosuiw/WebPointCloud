@@ -97,6 +97,9 @@ export class Viewer {
         this.controls.dampingFactor = 0.12;
         this.controls.enableZoom = true;
 
+        this.viewDim = '3d';        // '2d' | '3d' — 헤더 2D/3D 토글 상태
+        this._prevCameraPose = null; // 2D 진입 전 3D 시점 (3D로 복귀 시 사용)
+
         const _zoomStep = 0.08;
         this.renderer.domElement.addEventListener('wheel', (e) => {
             e.preventDefault();
@@ -1623,6 +1626,32 @@ export class Viewer {
         this.clipPlaneYMax.constant = 99999;
         this.clipPlaneYMin.constant = 99999;
         this._dirty = true;
+    }
+
+    /* ── 2D/3D 시점 고정 (헤더 토글) ──────────────── */
+    setViewDimension(dim) {
+        if (dim === this.viewDim) return;
+        this.viewDim = dim;
+
+        if (dim === '2d') {
+            // 3D로 복귀할 때 되돌아갈 시점 저장
+            this._prevCameraPose = {
+                pos: this.camera.position.clone(),
+                target: this.controls.target.clone(),
+            };
+            this.controls.enableRotate = false;
+            this.controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+            this.controls.touches.ONE = THREE.TOUCH.PAN;
+            this.setView('top');
+        } else {
+            this.controls.enableRotate = true;
+            this.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+            this.controls.touches.ONE = THREE.TOUCH.ROTATE;
+            if (this._prevCameraPose) {
+                this.animateCameraTo(this._prevCameraPose.pos, this._prevCameraPose.target);
+                this._prevCameraPose = null;
+            }
+        }
     }
 
     setView(preset) {

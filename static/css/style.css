@@ -71,6 +71,20 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
 .pill.on { background: var(--success); color: #111; }
 .pill.off { background: var(--danger); color: #fff; }
 
+/* ── 2D/3D 시점 고정 토글 (헤더) ────────────── */
+.view-dim-toggle {
+    display: flex; border: 1px solid var(--border); border-radius: 4px;
+    overflow: hidden; flex-shrink: 0;
+}
+.view-dim-btn {
+    background: none; border: none; color: var(--text-dim);
+    font-size: 0.8em; font-weight: 600; padding: 3px 10px;
+    cursor: pointer; touch-action: manipulation;
+}
+.view-dim-btn + .view-dim-btn { border-left: 1px solid var(--border); }
+.view-dim-btn:hover { color: var(--text); }
+.view-dim-btn.active { background: var(--accent); color: #111; }
+
 /* Recording indicator */
 .rec-pill { display: none; align-items: center; gap: 6px; background: rgba(210,40,40,0.85); color: #fff; font-family: 'Consolas', monospace; font-weight: 600; }
 .rec-pill.active { display: inline-flex; }
@@ -82,28 +96,6 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
 #sidebar-toggle { display: inline-flex; background: none; border: none; color: var(--text); font-size: 20px; cursor: pointer; padding: 4px 8px; line-height: 1; align-items: center; }
 #sidebar-toggle:hover { color: var(--accent); }
 #content { grid-row: 2; grid-column: 3; display: flex; flex-direction: column; overflow: hidden; }
-
-/* ── Fullscreen toggle button (header) ────────── */
-#btn-fullscreen {
-    background: none; border: 1px solid var(--border); color: var(--text-dim);
-    font-size: 16px; width: 32px; height: 32px; border-radius: 4px;
-    cursor: pointer; display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0; touch-action: manipulation;
-}
-#btn-fullscreen:hover { color: var(--accent); border-color: var(--accent); }
-
-/* Floating exit-fullscreen button (visible only in fullscreen) */
-#btn-exit-fullscreen {
-    display: none; position: fixed; top: 10px; right: 10px; z-index: 9999;
-    width: 40px; height: 40px; border-radius: 50%;
-    background: rgba(30,30,46,0.85); backdrop-filter: blur(6px);
-    border: 1px solid var(--border); color: var(--text);
-    font-size: 20px; cursor: pointer;
-    align-items: center; justify-content: center;
-    touch-action: manipulation; box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-}
-#btn-exit-fullscreen:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
-:fullscreen #btn-exit-fullscreen { display: flex; }
 
 /* ── Viewer ──────────────────────────────────── */
 #viewer-wrap { flex: 1; position: relative; overflow: hidden; background: #0d0d1a; min-height: 0; }
