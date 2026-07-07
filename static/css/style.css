@@ -919,34 +919,46 @@ kbd {
 .vmap-badge.parsing { background: rgba(88,166,255,0.12); color: #58a6ff; border: 1px solid #58a6ff44; }
 .vmap-badge.error   { background: rgba(255,68,68,0.12);  color: #ff4444; border: 1px solid #ff444444; }
 
-/* Vector Map layer list */
-.vmap-layer-item {
+/* Layers 패널 — 로드된 PCD/OSM 목록 */
+.layer-item {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 3px 4px;
+    padding: 4px;
     border-radius: 4px;
     font-size: 11px;
 }
-.vmap-layer-item:hover { background: var(--hover); }
-.vmap-item-name {
+.layer-item:hover { background: var(--bg-panel); }
+.layer-eye, .layer-focus, .layer-remove {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 2px 4px;
+    font-size: 11px;
+    flex-shrink: 0;
+    border-radius: 3px;
+}
+.layer-eye { font-size: 13px; opacity: 1; }
+.layer-eye.off { opacity: 0.35; }
+.layer-eye:hover, .layer-focus:hover { color: var(--accent); }
+.layer-remove:hover { color: var(--danger); }
+.layer-type-icon { color: var(--text-dim); font-size: 11px; flex-shrink: 0; }
+.layer-name-wrap {
     flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.3;
+}
+.layer-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text);
 }
-.vmap-item-meta { color: var(--text-dim); flex-shrink: 0; }
-.vmap-item-remove {
-    background: none;
-    border: none;
-    color: var(--text-dim);
-    cursor: pointer;
-    padding: 0 2px;
-    font-size: 11px;
-    flex-shrink: 0;
-}
-.vmap-item-remove:hover { color: var(--danger); }
+.layer-meta { color: var(--text-dim); font-size: 10px; }
+.layer-focus { font-weight: 600; }
 
 @media (max-width: 768px) {
     #app {

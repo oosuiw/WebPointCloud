@@ -40,6 +40,18 @@
             <button class="btn" id="btn-compare-map" title="Compare two maps">Compare</button>
         </div>
 
+        <!-- Layers (로드된 PCD/OSM 목록) -->
+        <div class="panel">
+            <div class="accordion-header" data-accordion="layers">
+                <h3>Layers</h3>
+                <span class="accordion-arrow">&#9660;</span>
+            </div>
+            <div class="accordion-body" data-accordion-body="layers">
+                <div class="list-empty" id="layer-list-empty">로드된 레이어가 없습니다</div>
+                <div id="layer-list"></div>
+            </div>
+        </div>
+
         <!-- View Options -->
         <div class="panel">
             <div class="accordion-header" data-accordion="view-layers">
@@ -101,8 +113,6 @@
                 <input type="range" id="ds-ratio-slider" min="0.01" max="1" step="0.01" value="1" class="flex-1">
                 <span class="text-mono-sm" id="ds-ratio-label">100%</span>
             </div>
-            <!-- 추가로 로드된 Point Cloud 목록 -->
-            <div id="extra-cloud-list" style="margin-top:4px"></div>
             <hr class="sep">
             <div class="accordion-header" data-accordion="view-postfilter">
                 <div class="sub-label mb-0">Post Filters</div>
@@ -159,8 +169,6 @@
                     <div class="progress-bar"><div id="vmap-progress-fill" class="progress-fill" style="width:0%"></div></div>
                     <div class="text-hint" id="vmap-progress-msg" style="margin-top:3px"></div>
                 </div>
-                <!-- 로드된 레이어 목록 -->
-                <div id="vmap-layer-list" style="margin-top:4px"></div>
                 <hr class="sep">
                 <!-- 레이어 토글 -->
                 <div class="ctrl-row compact">

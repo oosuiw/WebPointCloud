@@ -466,6 +466,46 @@ export class Viewer {
         this._dirty = true;
     }
 
+    /* 메인 Point Cloud를 씬에서 제거 (레이어 목록에서 "삭제"할 때 사용) */
+    clearPointCloud() {
+        if (this.pointCloud) {
+            this.scene.remove(this.pointCloud);
+            this.pointCloud.geometry.dispose();
+            this.pointCloud.material.dispose();
+            this.pointCloud = null;
+        }
+        this.cloudData = null;
+        this._fullCloudData = null;
+        this.bounds = null;
+        this.coordOffset = null;
+        document.getElementById('no-data-msg').style.display = '';
+        const ptsEl = document.getElementById('viewer-pts');
+        if (ptsEl) ptsEl.textContent = 'Points: 0';
+        this.updateStats();
+        this._dirty = true;
+    }
+
+    /* 특정 Object3D(레이어)로 카메라를 이동 — 현재 시야 방향은 유지한 채
+       중심/거리만 맞춰서 갑작스런 회전 없이 포커스 */
+    focusOnLayer(obj3d) {
+        if (!obj3d) return;
+        const box = new THREE.Box3().setFromObject(obj3d);
+        if (box.isEmpty()) return;
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const maxDim = Math.max(size.x, size.y, size.z, 1);
+        const dist = maxDim / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))) * 1.5;
+
+        const dir = new THREE.Vector3().subVectors(this.camera.position, this.controls.target);
+        if (dir.lengthSq() < 1e-6) dir.set(0.6, 0.6, 0.4);
+        dir.normalize();
+
+        const pos = new THREE.Vector3().copy(center).addScaledVector(dir, dist);
+        this.animateCameraTo(pos, center);
+    }
+
     /* ── 추가 PCD 레이어 (메인은 대체하지 않고 별도로 로드) ── */
     addPointCloud(data) {
         if (this._webglFailed) return null;

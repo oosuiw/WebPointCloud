@@ -12,6 +12,7 @@ import { initFloatingPanel } from './ui-float-panel.js';
 import { initFileManagement } from './ui-files.js';
 import { initAnalysis } from './analysis.js';
 import { initVectorMapUI } from './ui-vectormap.js';
+import { initLayerPanel } from './ui-layers.js';
 
 /* Re-export for app.js compatibility */
 export { showToast, appendLog };
@@ -40,4 +41,5 @@ export function initUI(viewer, legend, deps) {
     initKeyboardShortcuts(viewer, legend, deps, _uiState);
     initAnalysis(viewer, deps, _uiState);
     initVectorMapUI(viewer);
+    initLayerPanel(viewer);
 }

@@ -6,6 +6,7 @@
 import { $, formatFileSize, formatDate, formatPoints } from './utils.js';
 import { showToast, customConfirm, showLoading, hideLoading, withLoading } from './ui-notifications.js';
 import { appendLog } from './ui-panels.js';
+import { layerRegistry } from './layer-registry.js';
 
 /**
  * @param {import('./viewer.js').Viewer} viewer
@@ -93,6 +94,7 @@ export function initFileManagement(viewer, legend, deps, uiState) {
                 viewer.loadGaussianSplat(data);
             } else {
                 viewer.loadPointCloud(data);
+                registerMainPcdLayer(firstFile.name, data);
             }
             legend.update(viewer.colorMode, data.bounds, data.offset ? data.offset[2] : 0);
             if (data.savedPath) {
@@ -128,7 +130,7 @@ export function initFileManagement(viewer, legend, deps, uiState) {
                 return;
             }
             const entry = viewer.addPointCloud(data);
-            addExtraCloudListItem(file.name, data.numPoints, entry);
+            registerExtraCloudLayer(file.name, data, entry);
             showToast(`${file.name} 추가 완료 (${data.numPoints.toLocaleString()} pts)`, 'success');
             appendLog(`추가 완료 — ${file.name} (${data.numPoints.toLocaleString()} pts)`, 'success');
         } catch (err) {
@@ -137,20 +139,35 @@ export function initFileManagement(viewer, legend, deps, uiState) {
         }
     }
 
-    function addExtraCloudListItem(name, numPoints, entry) {
-        const list = $('extra-cloud-list');
-        if (!list) return;
-        const item = document.createElement('div');
-        item.className = 'vmap-layer-item';
-        item.innerHTML = `
-            <span class="vmap-item-name" title="${name}">${name}</span>
-            <span class="vmap-item-meta">${numPoints.toLocaleString()} pts</span>
-            <button class="vmap-item-remove" title="제거">&times;</button>`;
-        item.querySelector('.vmap-item-remove').addEventListener('click', () => {
-            viewer.removePointCloud(entry);
-            item.remove();
+    // ── Layers 패널 등록 헬퍼 ──
+    function registerMainPcdLayer(name, data) {
+        layerRegistry.upsertLayer({
+            id: 'main-pcd',
+            type: 'pcd',
+            name,
+            meta: `${data.numPoints.toLocaleString()} pts`,
+            getObject3D: () => viewer.pointCloud,
+            setVisible: (show) => { if (viewer.pointCloud) viewer.pointCloud.visible = show; },
+            remove: () => {
+                viewer.clearPointCloud();
+                showToast(`${name} 제거됨`, 'info');
+            },
         });
-        list.appendChild(item);
+    }
+
+    function registerExtraCloudLayer(name, data, entry) {
+        layerRegistry.upsertLayer({
+            id: entry,
+            type: 'pcd',
+            name,
+            meta: `${data.numPoints.toLocaleString()} pts`,
+            getObject3D: () => entry.mesh,
+            setVisible: (show) => { entry.mesh.visible = show; },
+            remove: () => {
+                viewer.removePointCloud(entry);
+                showToast(`${name} 제거됨`, 'info');
+            },
+        });
     }
 
     // Refresh map list
@@ -241,6 +258,7 @@ export function initFileManagement(viewer, legend, deps, uiState) {
                                 viewer.loadGaussianSplat(data);
                             } else {
                                 viewer.loadPointCloud(data);
+                                registerMainPcdLayer(`${mapName}/${f}`, data);
                             }
                             legend.update(viewer.colorMode, data.bounds, data.offset ? data.offset[2] : 0);
                             $('compare-a-name').textContent = `${mapName}/${f}`;
@@ -361,6 +379,7 @@ export function initFileManagement(viewer, legend, deps, uiState) {
                 viewer.loadGaussianSplat(data);
             } else {
                 viewer.loadPointCloud(data);
+                registerMainPcdLayer(file.name, data);
             }
             legend.update(viewer.colorMode, data.bounds, data.offset ? data.offset[2] : 0);
             $('no-data-msg').style.display = 'none';
