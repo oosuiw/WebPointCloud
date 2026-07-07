@@ -924,8 +924,8 @@ export class Viewer {
             onProgress,
             onDone: (segCount) => {
                 this._dirty = true;
-                // PCD 없이 벡터맵만 로드한 경우 → bounding box 기반으로 카메라 자동 맞춤
-                if (!this.coordOffset && this.vmapLayer._group) {
+                // 항상 카메라를 벡터맵 bounding box로 맞춤 (PCD와 다른 지역이어도 보이도록)
+                if (this.vmapLayer._group) {
                     const box = new THREE.Box3().setFromObject(this.vmapLayer._group);
                     const center = new THREE.Vector3();
                     box.getCenter(center);

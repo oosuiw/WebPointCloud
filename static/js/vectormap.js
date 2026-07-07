@@ -47,12 +47,8 @@ export class VectorMapLayer {
             catch (e) { onError?.(e); return; }
         }
 
-        // 3) binary 수신
-        // coordOffset이 없으면 파라미터를 생략 → 서버가 벡터맵 자체 중심 사용
-        let dataUrl = `/api/vectormap/data/${this._key}`;
-        if (coordOffset) {
-            dataUrl += `?ox=${coordOffset[0]}&oy=${coordOffset[1]}`;
-        }
+        // 3) binary 수신 — 항상 벡터맵 자체 중심 좌표 사용 (PCD와 다른 지역이어도 독립 표시)
+        const dataUrl = `/api/vectormap/data/${this._key}`;
         let binResp;
         try {
             binResp = await fetch(dataUrl);
