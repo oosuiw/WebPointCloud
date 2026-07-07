@@ -696,8 +696,14 @@ def _read_pcd(path):
             has_rgb = False
 
     intensity = _col(['intensity'])
-    if intensity is None:
-        intensity = np.zeros(n, dtype=np.float32)
+    if intensity is None or intensity.max() == 0:
+        # intensity 없는 XYZ-only PCD: Z 기반으로 대체
+        z32 = z.astype(np.float32)
+        z_min, z_max = float(z32.min()), float(z32.max())
+        if z_max > z_min:
+            intensity = (z32 - z_min) / (z_max - z_min)
+        else:
+            intensity = np.full(n, 0.5, dtype=np.float32)
     else:
         imax = intensity.max()
         if imax > 0:
