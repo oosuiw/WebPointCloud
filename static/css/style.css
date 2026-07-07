@@ -944,6 +944,13 @@ kbd {
 .layer-eye:hover, .layer-focus:hover { color: var(--accent); }
 .layer-remove:hover { color: var(--danger); }
 .layer-type-icon { color: var(--text-dim); font-size: 11px; flex-shrink: 0; }
+.layer-tint {
+    width: 16px; height: 16px; flex-shrink: 0;
+    padding: 0; border: 1px solid var(--border); border-radius: 3px;
+    background: none; cursor: pointer;
+}
+.layer-tint::-webkit-color-swatch-wrapper { padding: 1px; }
+.layer-tint::-webkit-color-swatch { border: none; border-radius: 2px; }
 .layer-name-wrap {
     flex: 1;
     min-width: 0;

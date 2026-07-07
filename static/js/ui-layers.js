@@ -38,6 +38,19 @@ export function initLayerPanel(viewer) {
             icon.className = 'layer-type-icon';
             icon.textContent = entry.type === 'vmap' ? '⬡' : '⚙';
 
+            let tintSwatch = null;
+            if (entry.setTint) {
+                tintSwatch = document.createElement('input');
+                tintSwatch.type = 'color';
+                tintSwatch.className = 'layer-tint';
+                tintSwatch.title = '레이어 색상 구분 (tint)';
+                tintSwatch.value = _toHexString(entry.tintColor);
+                tintSwatch.addEventListener('input', () => {
+                    const hex = parseInt(tintSwatch.value.slice(1), 16);
+                    entry.setTint(hex);
+                });
+            }
+
             const nameWrap = document.createElement('div');
             nameWrap.className = 'layer-name-wrap';
             const nameEl = document.createElement('span');
@@ -71,10 +84,17 @@ export function initLayerPanel(viewer) {
 
             item.appendChild(eyeBtn);
             item.appendChild(icon);
+            if (tintSwatch) item.appendChild(tintSwatch);
             item.appendChild(nameWrap);
             item.appendChild(focusBtn);
             item.appendChild(removeBtn);
             list.appendChild(item);
         }
+    }
+
+    function _toHexString(numOrHex) {
+        if (typeof numOrHex === 'string') return numOrHex;
+        const n = numOrHex ?? 0xffffff;
+        return `#${n.toString(16).padStart(6, '0')}`;
     }
 }

@@ -33,6 +33,10 @@ import {
 
 import { VectorMapLayer } from './vectormap.js';
 
+// 추가 PCD 레이어 자동 색조(tint) 팔레트 — 겹쳐진 클라우드를 구분하기 위함.
+// 메인 PCD는 기준(원본 색상)으로 두고 tint를 적용하지 않음.
+const TINT_PALETTE = [0xff8c42, 0x42d9c8, 0xffd166, 0xef476f, 0x9b5de5, 0x00bbf9, 0x90be6d];
+const TINT_STRENGTH = 0.35;
 
 export class Viewer {
     constructor(container) {
@@ -528,11 +532,22 @@ export class Viewer {
         }
         this.scene.add(mesh);
 
-        const entry = { mesh, fullData: data, dsRatio: 1.0, rawOffset };
+        const tintColor = TINT_PALETTE[this.extraClouds.length % TINT_PALETTE.length];
+        const entry = { mesh, fullData: data, dsRatio: 1.0, rawOffset, tintColor };
+        this.setMeshTint(mesh, tintColor, TINT_STRENGTH);
         this.extraClouds.push(entry);
         this.updateStats();
         this._dirty = true;
         return entry;
+    }
+
+    /* 특정 mesh에 색조(tint)를 입혀 겹쳐진 클라우드를 구분 (strength=0이면 원본 색상) */
+    setMeshTint(mesh, hexColor, strength = TINT_STRENGTH) {
+        if (!mesh?.material?.uniforms?.uTintColor) return;
+        const c = new THREE.Color(hexColor);
+        mesh.material.uniforms.uTintColor.value.set(c.r, c.g, c.b);
+        mesh.material.uniforms.uTintStrength.value = strength;
+        this._dirty = true;
     }
 
     removePointCloud(entry) {
@@ -710,6 +725,7 @@ export class Viewer {
             mesh.frustumCulled = false;
             mesh.position.copy(pos);
             this._syncColorUniforms(mesh);
+            if (e.tintColor !== undefined) this.setMeshTint(mesh, e.tintColor, TINT_STRENGTH);
             this.scene.add(mesh);
             e.mesh = mesh;
         });

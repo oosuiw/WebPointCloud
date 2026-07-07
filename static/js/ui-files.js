@@ -172,6 +172,11 @@ export function initFileManagement(viewer, legend, deps, uiState) {
             meta: `${data.numPoints.toLocaleString()} pts`,
             getObject3D: () => entry.mesh,
             setVisible: (show) => { entry.mesh.visible = show; },
+            tintColor: entry.tintColor,
+            setTint: (hexColor) => {
+                entry.tintColor = hexColor;
+                viewer.setMeshTint(entry.mesh, hexColor);
+            },
             remove: () => {
                 viewer.removePointCloud(entry);
                 showToast(`${name} 제거됨`, 'info');
