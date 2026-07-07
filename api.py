@@ -5,6 +5,7 @@ import numpy as np
 import json
 import os
 import re
+import math
 import struct
 import io
 import glob
@@ -37,9 +38,60 @@ except ImportError:
     _HAS_YAML = False
 
 
+_Q = rb"""['"]"""
+_VNODE_PEEK = re.compile(rb"""<node\s+id=""" + _Q + rb"""(\d+)""" + _Q + rb"""[^>]+lat=""" + _Q + rb"""([\d.-]+)""" + _Q + rb"""[^>]+lon=""" + _Q + rb"""([\d.-]+)""" + _Q)
+
+
+def _peek_first_node_latlon(osm_path: str):
+    """파일 첫 <node>의 lat/lon을 훑어서 반환 (대표 좌표 판별용)."""
+    try:
+        with open(osm_path, 'rb') as fh:
+            for _ in range(200):   # 헤더 근처만 확인하면 충분
+                line = fh.readline()
+                if not line:
+                    break
+                if b'<node' in line:
+                    m = _VNODE_PEEK.search(line)
+                    if m:
+                        return float(m.group(2)), float(m.group(3))  # lat, lon
+    except OSError:
+        pass
+    return None
+
+
+def _mgrs_grid_to_utm_origin(mgrs_grid: str):
+    """MGRS 100km 그리드 코드(예: '52SCD') → (Transformer, origin_utm) or None."""
+    if not (_HAS_MGRS and mgrs_grid):
+        return None
+    try:
+        orig_lat, orig_lon = _mgrs_conv.toLatLon(mgrs_grid + '0' * 10)
+        zone = int((orig_lon + 180) / 6) + 1
+        epsg = 32600 + zone if orig_lat >= 0 else 32700 + zone
+        t = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+        origin_utm = t.transform(orig_lon, orig_lat)
+        return t, origin_utm
+    except Exception:
+        return None
+
+
+def _auto_local_origin(lat: float, lon: float):
+    """대표 노드의 lat/lon → UTM 변환 후 100km 그리드 경계로 내림.
+    Autoware MGRS 로컬 좌표 관례(로컬 = UTM - 100km 그리드 원점)를 파일 경로/이름과
+    무관하게, 파일 안의 실제 좌표값만으로 재현한다."""
+    zone = int((lon + 180) / 6) + 1
+    epsg = 32600 + zone if lat >= 0 else 32700 + zone
+    t = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+    x, y = t.transform(lon, lat)
+    origin = (math.floor(x / 100000.0) * 100000.0, math.floor(y / 100000.0) * 100000.0)
+    return t, origin
+
+
 def _get_vmap_transformer(osm_path: str):
     """OSM 파일 경로에서 좌표 변환 함수 결정.
-    map_projector_info.yaml이 있으면 MGRS 변환, 없으면 EPSG:32652."""
+    1) map_projector_info.yaml (projector_type: MGRS)이 있으면 그 그리드 사용
+    2) 없으면 파일 내 대표 노드 좌표를 100km 그리드 경계로 내림하여 로컬 원점 자동 추정
+       (파일/폴더 이름에 의존하지 않고 좌표값 자체로 판별)
+    3) 좌표를 읽을 수 없으면 EPSG:32652 (원점 보정 없음)"""
     if not _HAS_PYPROJ:
         return None, None
 
@@ -49,17 +101,20 @@ def _get_vmap_transformer(osm_path: str):
             with open(yaml_path) as f:
                 info = _yaml.safe_load(f)
             if info.get('projector_type') == 'MGRS':
-                mgrs_grid = info.get('mgrs_grid', '')
-                if mgrs_grid:
-                    # 그리드 원점의 lat/lon → UTM Zone 좌표
-                    orig_lat, orig_lon = _mgrs_conv.toLatLon(mgrs_grid + '0000000000')
-                    zone = int((orig_lon + 180) / 6) + 1
-                    epsg = 32600 + zone if orig_lat >= 0 else 32700 + zone
-                    t = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
-                    origin_utm = t.transform(orig_lon, orig_lat)
-                    return t, origin_utm
+                result = _mgrs_grid_to_utm_origin(info.get('mgrs_grid', ''))
+                if result:
+                    return result
         except Exception:
             pass
+
+    # 폴백: 파일 내 대표 노드의 실제 좌표로 UTM zone + 100km 그리드 원점 자동 추정
+    latlon = _peek_first_node_latlon(osm_path)
+    if latlon:
+        try:
+            return _auto_local_origin(latlon[0], latlon[1])
+        except Exception:
+            pass
+
     return _wgs2utm52, None
 
 api_bp = Blueprint('api', __name__)
@@ -989,8 +1044,7 @@ def analysis_icp():
 _vmap_cache: dict = {}          # key → {status, progress, message, data?}
 _vmap_cache_lock = threading.Lock()
 
-_Q    = rb"""['"]"""
-_VNODE = re.compile(rb"""<node\s+id=""" + _Q + rb"""(\d+)""" + _Q + rb"""[^>]+lat=""" + _Q + rb"""([\d.-]+)""" + _Q + rb"""[^>]+lon=""" + _Q + rb"""([\d.-]+)""" + _Q)
+_VNODE = _VNODE_PEEK
 _VWAY  = re.compile(rb"""<way\s+id=""" + _Q + rb"""(\d+)""" + _Q)
 _VND   = re.compile(rb"""<nd\s+ref=""" + _Q + rb"""(\d+)""" + _Q)
 _VTAG  = re.compile(rb"""<tag\s+k=""" + _Q + rb"""([^'"]+)""" + _Q + rb"""\s+v=""" + _Q + rb"""([^'"]+)""" + _Q)
