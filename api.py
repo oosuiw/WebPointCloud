@@ -1,18 +1,27 @@
-"""REST API routes (Flask Blueprint) — File management + Analysis"""
+"""REST API routes (Flask Blueprint) — File management + Analysis + Vector Map"""
 
-from flask import Blueprint, jsonify, request, send_file, current_app
+from flask import Blueprint, jsonify, request, send_file, current_app, Response
 import numpy as np
 import json
 import os
+import re
 import struct
 import io
 import glob
 import shutil
 import tempfile
 import threading
+import hashlib
 import uuid
 from datetime import datetime
 from pointcloud_io import read_pointcloud, arrays_to_binary, gaussians_to_binary, write_las, SUPPORTED_EXTENSIONS
+
+try:
+    from pyproj import Transformer
+    _wgs2utm52 = Transformer.from_crs("EPSG:4326", "EPSG:32652", always_xy=True)
+    _HAS_PYPROJ = True
+except ImportError:
+    _HAS_PYPROJ = False
 
 api_bp = Blueprint('api', __name__)
 
@@ -932,3 +941,208 @@ def analysis_icp():
 
     except Exception as e:
         return _error_response(e, 'analysis_icp')
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Vector Map (Lanelet2 OSM) — 비동기 파싱 + binary 전송
+# ══════════════════════════════════════════════════════════════════════════════
+
+_vmap_cache: dict = {}          # key → {status, progress, message, data?}
+_vmap_cache_lock = threading.Lock()
+
+_VNODE = re.compile(rb"<node id='(\d+)'[^>]+lat='([\d.-]+)'[^>]+lon='([\d.-]+)'")
+_VWAY  = re.compile(rb"<way id='(\d+)'")
+_VND   = re.compile(rb"<nd ref='(\d+)'")
+
+
+def _year_of(nid: int) -> int:
+    if nid < 100_000_000: return 2024
+    if nid < 200_000_000: return 2020
+    return 2019
+
+
+def _parse_vmap_bg(path: str, key: str) -> None:
+    """백그라운드 파싱 — Lanelet2 OSM → Float32 세그먼트 배열."""
+    try:
+        file_size = os.path.getsize(path)
+        nodes: dict[int, tuple] = {}
+        ways:  dict[int, list]  = {}
+        cur_wid = None
+        cur_refs: list = []
+        in_way = False
+        n_lines = 0
+
+        with _vmap_cache_lock:
+            _vmap_cache[key] = {'status': 'parsing', 'progress': 5, 'message': '노드 읽는 중...'}
+
+        with open(path, 'rb') as fh:
+            for line in fh:
+                n_lines += 1
+                if n_lines % 2_000_000 == 0:
+                    pct = min(int(fh.tell() / file_size * 65), 65)
+                    with _vmap_cache_lock:
+                        _vmap_cache[key]['progress'] = pct
+                        _vmap_cache[key]['message'] = f'노드 {len(nodes):,}개 읽는 중...'
+
+                if b'<node' in line:
+                    m = _VNODE.search(line)
+                    if m:
+                        nid = int(m.group(1))
+                        lat, lon = float(m.group(2)), float(m.group(3))
+                        if _HAS_PYPROJ:
+                            x, y = _wgs2utm52.transform(lon, lat)
+                        else:
+                            x, y = lon, lat
+                        nodes[nid] = (x, y)
+
+                elif b'<way ' in line:
+                    m = _VWAY.search(line)
+                    if m:
+                        cur_wid = int(m.group(1)); cur_refs = []; in_way = True
+
+                elif b'<nd ' in line and in_way:
+                    m = _VND.search(line)
+                    if m:
+                        cur_refs.append(int(m.group(1)))
+
+                elif b'</way>' in line and in_way:
+                    if cur_wid is not None:
+                        ways[cur_wid] = cur_refs[:]
+                    in_way = False; cur_wid = None
+
+        with _vmap_cache_lock:
+            _vmap_cache[key]['progress'] = 70
+            _vmap_cache[key]['message'] = f'세그먼트 빌드 중 ({len(ways):,} ways)...'
+
+        # 중심 offset
+        if nodes:
+            xs = [v[0] for v in nodes.values()]
+            ys = [v[1] for v in nodes.values()]
+            ox = float(np.mean(xs))
+            oy = float(np.mean(ys))
+        else:
+            ox = oy = 0.0
+
+        # 세그먼트 배열 구성
+        YEAR_IDX = {2024: 0, 2020: 1, 2019: 2}
+        pos_rows, year_rows = [], []
+
+        for wid, refs in ways.items():
+            yr = YEAR_IDX[_year_of(wid)]
+            for i in range(len(refs) - 1):
+                r0, r1 = refs[i], refs[i + 1]
+                if r0 not in nodes or r1 not in nodes:
+                    continue
+                x0, y0 = nodes[r0]
+                x1, y1 = nodes[r1]
+                pos_rows.append((x0 - ox, y0 - oy, 0.0, x1 - ox, y1 - oy, 0.0))
+                year_rows.append(yr)
+
+        del nodes, ways
+
+        positions = np.array(pos_rows, dtype=np.float32)   # (N, 6)
+        years_arr = np.array(year_rows, dtype=np.uint8)    # (N,)
+
+        with _vmap_cache_lock:
+            _vmap_cache[key] = {
+                'status': 'ready',
+                'progress': 100,
+                'message': f'{len(pos_rows):,} 세그먼트 준비 완료',
+                'data': {
+                    'positions': positions,
+                    'years':     years_arr,
+                    'offset':    [ox, oy, 0.0],
+                    'seg_count': len(pos_rows),
+                },
+            }
+
+    except Exception as exc:
+        with _vmap_cache_lock:
+            _vmap_cache[key] = {'status': 'error', 'progress': 0, 'message': str(exc)}
+
+
+@api_bp.route('/api/vectormap/load', methods=['POST'])
+def vmap_load():
+    err = _require_json()
+    if err:
+        return err
+    path = (request.json.get('path') or '').strip()
+    if not path:
+        return jsonify({'error': 'path required'}), 400
+
+    real_path = os.path.realpath(path)
+    if not os.path.isfile(real_path):
+        return jsonify({'error': 'file not found'}), 404
+    if not real_path.endswith('.osm'):
+        return jsonify({'error': '.osm 파일만 지원합니다'}), 400
+    if not _HAS_PYPROJ:
+        return jsonify({'error': 'pyproj not installed — pip install pyproj'}), 500
+
+    key = hashlib.md5(real_path.encode()).hexdigest()[:16]
+
+    with _vmap_cache_lock:
+        st = _vmap_cache.get(key, {}).get('status', 'idle')
+
+    if st == 'ready':
+        return jsonify({'key': key, 'status': 'ready'})
+    if st == 'parsing':
+        return jsonify({'key': key, 'status': 'parsing'})
+
+    with _vmap_cache_lock:
+        _vmap_cache[key] = {'status': 'parsing', 'progress': 0, 'message': '파싱 시작...'}
+    threading.Thread(target=_parse_vmap_bg, args=(real_path, key), daemon=True).start()
+    return jsonify({'key': key, 'status': 'parsing'})
+
+
+@api_bp.route('/api/vectormap/status/<key>')
+def vmap_status(key):
+    with _vmap_cache_lock:
+        d = _vmap_cache.get(key, {'status': 'idle', 'progress': 0, 'message': ''})
+    return jsonify({
+        'status':   d.get('status', 'idle'),
+        'progress': d.get('progress', 0),
+        'message':  d.get('message', ''),
+    })
+
+
+@api_bp.route('/api/vectormap/data/<key>')
+def vmap_data(key):
+    """Binary 세그먼트 반환 — [Float32 N×6 positions][Uint8 N years]"""
+    with _vmap_cache_lock:
+        entry = _vmap_cache.get(key)
+    if not entry or entry.get('status') != 'ready':
+        return jsonify({'error': 'not ready'}), 404
+
+    data = entry['data']
+    # 포인트클라우드 coordOffset을 쿼리로 받아서 좌표 shift
+    try:
+        ox = float(request.args.get('ox', data['offset'][0]))
+        oy = float(request.args.get('oy', data['offset'][1]))
+    except (TypeError, ValueError):
+        ox, oy = data['offset'][0], data['offset'][1]
+
+    positions = data['positions'].copy()
+    dx = data['offset'][0] - ox
+    dy = data['offset'][1] - oy
+    if abs(dx) > 1e-3 or abs(dy) > 1e-3:
+        positions[:, 0] += dx;  positions[:, 3] += dx
+        positions[:, 1] += dy;  positions[:, 4] += dy
+
+    buf = positions.tobytes() + data['years'].tobytes()
+    return Response(
+        buf,
+        mimetype='application/octet-stream',
+        headers={
+            'X-Seg-Count':  str(data['seg_count']),
+            'X-Offset-X':   str(data['offset'][0]),
+            'X-Offset-Y':   str(data['offset'][1]),
+            'Access-Control-Expose-Headers': 'X-Seg-Count,X-Offset-X,X-Offset-Y',
+        },
+    )
+
+
+@api_bp.route('/api/vectormap/clear/<key>', methods=['DELETE'])
+def vmap_clear_cache(key):
+    with _vmap_cache_lock:
+        _vmap_cache.pop(key, None)
+    return jsonify({'ok': True})

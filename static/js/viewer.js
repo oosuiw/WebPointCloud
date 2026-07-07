@@ -31,6 +31,8 @@ import {
     clearCompare as _clearCompare,
 } from './viewer-compare.js';
 
+import { VectorMapLayer } from './vectormap.js';
+
 
 export class Viewer {
     constructor(container) {
@@ -56,6 +58,7 @@ export class Viewer {
         this.coordOffset = null;      // Float64Array([ox,oy,oz]) — add back for original coords
         this.pointCloud = null;
         this.gaussianSplat = null;
+        this.vmapLayer = new VectorMapLayer(this.scene);
         this.pointSize = 0.05;
         this.colorMode = 'intensity';
         this.gamma = 0.6;
@@ -905,11 +908,33 @@ export class Viewer {
             if (this.mapCloud) { this.mapCloud.visible = show; }
         } else if (layer === 'kfrm') {
             this.kfrmClouds.forEach(c => { c.visible = show; });
+        } else if (layer === 'vectormap') {
+            this.vmapLayer.setVisible(show);
         } else {
             const cloudMap = { raw: 'rawCloud', cur: 'curCloud' };
             const prop = cloudMap[layer];
             if (prop && this[prop]) { this[prop].visible = show; }
         }
+        this._dirty = true;
+    }
+
+    // ── Vector Map ────────────────────────────────────────
+    loadVectorMap(osmPath, { onProgress, onDone, onError } = {}) {
+        this.vmapLayer.load(osmPath, this.coordOffset, { onProgress, onDone, onError });
+    }
+
+    clearVectorMap() {
+        this.vmapLayer.clear();
+        this._dirty = true;
+    }
+
+    setVectorMapYearVisible(yearIdx, show) {
+        this.vmapLayer.setYearVisible(yearIdx, show);
+        this._dirty = true;
+    }
+
+    setVectorMapZOffset(z) {
+        this.vmapLayer.setZOffset(z);
         this._dirty = true;
     }
     toggleGrid(show) { this.grid.visible = show; this._dirty = true; }

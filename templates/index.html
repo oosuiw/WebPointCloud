@@ -136,6 +136,51 @@
             </div>
         </div>
 
+        <!-- ═══ Vector Map ═══ -->
+        <div class="panel">
+            <div class="accordion-header" data-accordion="vectormap">
+                <h3>Vector Map <span class="vmap-badge" id="vmap-status-badge"></span></h3>
+                <span class="accordion-arrow">&#9660;</span>
+            </div>
+            <div class="accordion-body" data-accordion-body="vectormap">
+                <div class="ctrl-row" style="gap:4px">
+                    <input type="text" id="vmap-path" placeholder="lanelet2_map.osm 경로 입력"
+                           style="flex:1;font-size:11px;min-width:0">
+                    <button class="btn btn-sm primary" id="btn-vmap-load">Load</button>
+                </div>
+                <div id="vmap-progress-wrap" style="display:none;margin-top:6px">
+                    <div class="progress-bar"><div id="vmap-progress-fill" class="progress-fill" style="width:0%"></div></div>
+                    <div class="text-hint" id="vmap-progress-msg" style="margin-top:3px"></div>
+                </div>
+                <hr class="sep">
+                <div class="ctrl-row compact">
+                    <input type="checkbox" id="ckb-vmap-layer" checked>
+                    <label for="ckb-vmap-layer">Vector Map 표시</label>
+                </div>
+                <div class="sub-label" style="margin-top:6px">연도별 레이어</div>
+                <div class="ctrl-row compact">
+                    <input type="checkbox" id="ckb-vmap-2024" checked>
+                    <label for="ckb-vmap-2024" class="vmap-yr-label yr2024">&#9646; 2024</label>
+                </div>
+                <div class="ctrl-row compact">
+                    <input type="checkbox" id="ckb-vmap-2020" checked>
+                    <label for="ckb-vmap-2020" class="vmap-yr-label yr2020">&#9646; 2020</label>
+                </div>
+                <div class="ctrl-row compact">
+                    <input type="checkbox" id="ckb-vmap-2019" checked>
+                    <label for="ckb-vmap-2019" class="vmap-yr-label yr2019">&#9646; 2019</label>
+                </div>
+                <div class="ctrl-row" style="margin-top:6px">
+                    <label class="narrow">Z 오프셋</label>
+                    <input type="number" id="vmap-z-offset" value="0" step="0.1" style="width:70px">
+                    <span class="text-hint" style="margin-left:4px">m</span>
+                </div>
+                <div class="btn-row" style="margin-top:8px">
+                    <button class="btn flex-1" id="btn-vmap-clear">Clear</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Transform -->
         <div class="panel">
             <div class="accordion-header collapsed" data-accordion="transform">

@@ -11,6 +11,7 @@ import { initKeyboardShortcuts } from './ui-keyboard.js';
 import { initFloatingPanel } from './ui-float-panel.js';
 import { initFileManagement } from './ui-files.js';
 import { initAnalysis } from './analysis.js';
+import { initVectorMapUI } from './ui-vectormap.js';
 
 /* Re-export for app.js compatibility */
 export { showToast, appendLog };
@@ -38,4 +39,5 @@ export function initUI(viewer, legend, deps) {
     initFileManagement(viewer, legend, deps, _uiState);
     initKeyboardShortcuts(viewer, legend, deps, _uiState);
     initAnalysis(viewer, deps, _uiState);
+    initVectorMapUI(viewer);
 }

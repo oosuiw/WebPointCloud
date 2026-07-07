@@ -908,6 +908,25 @@ kbd {
 .ml-4 { margin-left: 4px; }
 
 /* ── Narrow screens (≤768px): sidebar overlay ───── */
+/* ── Vector Map panel ──────────────────────────────── */
+.vmap-yr-label { font-size: 0.82em; font-weight: 500; }
+.yr2024 { color: #f0883e; }
+.yr2020 { color: #3fb950; }
+.yr2019 { color: #58a6ff; }
+
+.vmap-badge {
+    display: inline-block;
+    font-size: 0.65em;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 10px;
+    vertical-align: middle;
+    letter-spacing: 0.04em;
+}
+.vmap-badge.ready   { background: rgba(63,185,80,0.15);  color: #3fb950; border: 1px solid #3fb95044; }
+.vmap-badge.parsing { background: rgba(88,166,255,0.12); color: #58a6ff; border: 1px solid #58a6ff44; }
+.vmap-badge.error   { background: rgba(255,68,68,0.12);  color: #ff4444; border: 1px solid #ff444444; }
+
 @media (max-width: 768px) {
     #app {
         grid-template-columns: 0px 0px 1fr;
