@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=WebPointCloud
+Comment=3D Point Cloud Viewer & Analysis
+Exec=/usr/bin/webpointcloud
+Icon=webpointcloud
+Terminal=false
+Categories=Graphics;Viewer;Science;
+StartupNotify=true

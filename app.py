@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.11
 """WebPointCloud — Web-based 3D Point Cloud Viewer & Analysis Tool"""
 
 import os

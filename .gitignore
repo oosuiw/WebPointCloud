@@ -11,3 +11,7 @@ Thumbs.db
 *.swp
 *~
 uploads/
+
+# .deb 패키징 빌드 산출물
+packaging/build/
+packaging/*.deb

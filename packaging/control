@@ -1,0 +1,12 @@
+Package: webpointcloud
+Version: VERSION_PLACEHOLDER
+Section: science
+Priority: optional
+Architecture: amd64
+Depends: python3 (>= 3.10), python3-gi, gir1.2-webkit2-4.0 | gir1.2-webkit2-4.1, libgtk-3-0
+Maintainer: WebPointCloud <noreply@example.com>
+Description: 3D Point Cloud Viewer & Analysis
+ WebPointCloud is a desktop viewer for LAS/LAZ/PCD point clouds and
+ Lanelet2 (OSM) vector maps, with measurement, cropping, and analysis
+ tools. Packaged as a native desktop window (pywebview) around a
+ local-only Flask backend.
