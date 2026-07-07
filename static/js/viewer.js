@@ -924,8 +924,9 @@ export class Viewer {
             onProgress,
             onDone: (segCount) => {
                 this._dirty = true;
-                // 항상 카메라를 벡터맵 bounding box로 맞춤 (PCD와 다른 지역이어도 보이도록)
-                if (this.vmapLayer._group) {
+                // PCD 없을 때만 카메라를 벡터맵으로 이동
+                // (PCD가 있으면 같은 지역이므로 현재 카메라 위치 유지)
+                if (!this.coordOffset && this.vmapLayer._group) {
                     const box = new THREE.Box3().setFromObject(this.vmapLayer._group);
                     const center = new THREE.Vector3();
                     box.getCenter(center);
@@ -1397,6 +1398,7 @@ export class Viewer {
 
     setBackground(light) {
         this.scene.background = new THREE.Color(light ? 0xe8e8ee : 0x0d0d1a);
+        this.vmapLayer.setTheme(!light);
         this._dirty = true;
     }
 

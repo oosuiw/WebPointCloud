@@ -3,13 +3,13 @@
    ═══════════════════════════════════════════════════════ */
 import * as THREE from 'three';
 
-// type 코드 → 색상 (api.py _VTYPE_MAP과 동기화)
+// 타입 코드 → [dark 색상, light 색상]  (api.py _VTYPE_MAP과 동기화)
 const TYPE_META = [
-    { label: 'lane',    color: 0xe8e8e8 },  // 0: 차선 경계 (흰색)
-    { label: 'virtual', color: 0x4488ff },  // 1: 가상 경계 (파랑)
-    { label: 'border',  color: 0x888888 },  // 2: 도로 경계 (회색)
-    { label: 'stop',    color: 0xff4444 },  // 3: 정지선 (빨강)
-    { label: 'curb',    color: 0x555555 },  // 4: 연석/가드레일 (짙은 회색)
+    { label: 'lane',    dark: 0xe8e8e8, light: 0x222222 },  // 0: 차선 경계
+    { label: 'virtual', dark: 0x4488ff, light: 0x0044cc },  // 1: 가상 경계
+    { label: 'border',  dark: 0x888888, light: 0x444444 },  // 2: 도로 경계
+    { label: 'stop',    dark: 0xff4444, light: 0xcc0000 },  // 3: 정지선
+    { label: 'curb',    dark: 0x555555, light: 0x333333 },  // 4: 연석
 ];
 
 export class VectorMapLayer {
@@ -20,6 +20,7 @@ export class VectorMapLayer {
         this._pollTimer = null;
         this._visible   = true;
         this._zOffset   = 0.0;
+        this._dark      = true;
     }
 
     get isLoaded() { return this._group !== null; }
@@ -47,22 +48,31 @@ export class VectorMapLayer {
             catch (e) { onError?.(e); return; }
         }
 
-        // 3) binary 수신 — 항상 벡터맵 자체 중심 좌표 사용 (PCD와 다른 지역이어도 독립 표시)
-        const dataUrl = `/api/vectormap/data/${this._key}`;
+        // 3) binary 수신 — 항상 벡터맵 자체 중심 좌표 반환
         let binResp;
         try {
-            binResp = await fetch(dataUrl);
+            binResp = await fetch(`/api/vectormap/data/${this._key}`);
             if (!binResp.ok) throw new Error(`데이터 수신 실패 (${binResp.status})`);
         } catch (e) { onError?.(e); return; }
 
         const segCount  = parseInt(binResp.headers.get('X-Seg-Count') || '0');
+        const vmapOx    = parseFloat(binResp.headers.get('X-Offset-X') || '0');
+        const vmapOy    = parseFloat(binResp.headers.get('X-Offset-Y') || '0');
         const buf       = await binResp.arrayBuffer();
         const posBytes  = segCount * 6 * 4;
         const positions = new Float32Array(buf, 0, segCount * 6);
         const types     = new Uint8Array(buf, posBytes, segCount);
 
         this._buildMesh(positions, types, segCount);
-        onDone?.(segCount);
+
+        // PCD coordOffset이 있으면 벡터맵 group을 PCD 좌표계에 정렬
+        // (같은 지역이면 dx≈0, 다른 지역이면 그룹 전체가 해당 위치로 이동)
+        if (coordOffset && this._group) {
+            this._group.position.x = vmapOx - coordOffset[0];
+            this._group.position.y = vmapOy - coordOffset[1];
+        }
+
+        onDone?.(segCount, { vmapOx, vmapOy });
     }
 
     // ── Three.js 메시 구성 — 타입별 LineSegments ────────
@@ -71,7 +81,6 @@ export class VectorMapLayer {
         group.name = 'vectormap';
         group.position.z = this._zOffset;
 
-        // 타입별 버킷
         const buckets = TYPE_META.map(() => []);
         for (let i = 0; i < segCount; i++) {
             const t = types[i] < TYPE_META.length ? types[i] : 0;
@@ -89,9 +98,10 @@ export class VectorMapLayer {
             }
             const geom = new THREE.BufferGeometry();
             geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-            const mat  = new THREE.LineBasicMaterial({
-                color: TYPE_META[t].color,
-                opacity: t === 1 ? 0.5 : 1.0,   // virtual은 반투명
+            const col = this._dark ? TYPE_META[t].dark : TYPE_META[t].light;
+            const mat = new THREE.LineBasicMaterial({
+                color: col,
+                opacity: t === 1 ? 0.6 : 1.0,
                 transparent: t === 1,
             });
             const mesh = new THREE.LineSegments(geom, mat);
@@ -123,6 +133,15 @@ export class VectorMapLayer {
     setVisible(show) {
         this._visible = show;
         if (this._group) this._group.visible = show;
+    }
+
+    setTheme(dark) {
+        this._dark = dark;
+        if (!this._group) return;
+        for (let t = 0; t < TYPE_META.length; t++) {
+            const child = this._group.getObjectByName(`vmap_${TYPE_META[t].label}`);
+            if (child) child.material.color.setHex(dark ? TYPE_META[t].dark : TYPE_META[t].light);
+        }
     }
 
     setZOffset(z) {
