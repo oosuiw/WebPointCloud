@@ -12,6 +12,10 @@ const TYPE_META = [
     { label: 'curb',    dark: 0x555555, light: 0x333333 },  // 4: 연석
 ];
 
+// lanelet 면 채우기 색 (반투명) / 방향 화살표 색
+const LANELET_FILL_META = { dark: 0x4a7dff, light: 0x3a6bdf, opacity: 0.16 };
+const ARROW_META = { dark: 0xffd166, light: 0xb8860b };
+
 export class VectorMapLayer {
     constructor(scene) {
         this.scene      = scene;
@@ -62,20 +66,29 @@ export class VectorMapLayer {
             if (!binResp.ok) throw new Error(`데이터 수신 실패 (${binResp.status})`);
         } catch (e) { onError?.(e); return; }
 
-        const segCount  = parseInt(binResp.headers.get('X-Seg-Count') || '0');
+        const segCount     = parseInt(binResp.headers.get('X-Seg-Count') || '0');
+        const laneletCount = parseInt(binResp.headers.get('X-Lanelet-Count') || '0');  // 삼각형 개수
+        const arrowCount   = parseInt(binResp.headers.get('X-Arrow-Count') || '0');    // 화살표 선분 개수
         const vmapOx    = parseFloat(binResp.headers.get('X-Offset-X') || '0');
         const vmapOy    = parseFloat(binResp.headers.get('X-Offset-Y') || '0');
         const vmapOz    = parseFloat(binResp.headers.get('X-Offset-Z') || '0');
         const buf       = await binResp.arrayBuffer();
-        const posBytes  = segCount * 6 * 4;
-        const positions = new Float32Array(buf, 0, segCount * 6);
-        const types     = new Uint8Array(buf, posBytes, segCount);
+        // 서버 전송 순서: positions(f32) → lanelet_verts(f32) → arrow_verts(f32) → types(u8)
+        // (Uint8 영역을 맨 뒤에 둬야 Float32Array 뷰들의 시작 오프셋이 4바이트 배수로 유지됨)
+        const posBytes     = segCount * 6 * 4;
+        const laneletBytes = laneletCount * 9 * 4;   // 삼각형당 정점 3개 * 3좌표 * 4바이트
+        const arrowBytes   = arrowCount * 6 * 4;     // 선분당 정점 2개 * 3좌표 * 4바이트
+
+        const positions    = new Float32Array(buf, 0, segCount * 6);
+        const laneletVerts = new Float32Array(buf, posBytes, laneletCount * 9);
+        const arrowVerts   = new Float32Array(buf, posBytes + laneletBytes, arrowCount * 6);
+        const types        = new Uint8Array(buf, posBytes + laneletBytes + arrowBytes, segCount);
 
         this._vmapOx = vmapOx;
         this._vmapOy = vmapOy;
         this._vmapOz = vmapOz;
 
-        this._buildMesh(positions, types, segCount);
+        this._buildMesh(positions, types, segCount, laneletVerts, arrowVerts);
 
         // coordOffset(PCD 기준 또는 첫 번째 OSM 기준)이 있으면 좌표 정렬
         if (coordOffset && this._group) {
@@ -88,8 +101,8 @@ export class VectorMapLayer {
         onDone?.(segCount, { vmapOx, vmapOy });
     }
 
-    // ── Three.js 메시 구성 — 타입별 LineSegments ────────
-    _buildMesh(positions, types, segCount) {
+    // ── Three.js 메시 구성 — 타입별 LineSegments + lanelet 면 + 방향 화살표 ──
+    _buildMesh(positions, types, segCount, laneletVerts, arrowVerts) {
         const group = new THREE.Group();
         group.name = 'vectormap';
         group.position.z = this._zOffset;
@@ -119,6 +132,37 @@ export class VectorMapLayer {
             });
             const mesh = new THREE.LineSegments(geom, mat);
             mesh.name    = `vmap_${TYPE_META[t].label}`;
+            mesh.visible = this._visible;
+            group.add(mesh);
+        }
+
+        // lanelet 면 채우기 (반투명) — 경계선보다 살짝 아래(depthWrite:false)로
+        // 그려서 z-fighting 없이 라인이 위에 또렷하게 보이도록 함
+        if (laneletVerts && laneletVerts.length) {
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.BufferAttribute(laneletVerts, 3));
+            const col = this._dark ? LANELET_FILL_META.dark : LANELET_FILL_META.light;
+            const mat = new THREE.MeshBasicMaterial({
+                color: col,
+                transparent: true,
+                opacity: LANELET_FILL_META.opacity,
+                side: THREE.DoubleSide,
+                depthWrite: false,
+            });
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.name    = 'vmap_lanelet_fill';
+            mesh.visible = this._visible;
+            group.add(mesh);
+        }
+
+        // 방향 화살표 (쉐브론)
+        if (arrowVerts && arrowVerts.length) {
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.BufferAttribute(arrowVerts, 3));
+            const col = this._dark ? ARROW_META.dark : ARROW_META.light;
+            const mat = new THREE.LineBasicMaterial({ color: col });
+            const mesh = new THREE.LineSegments(geom, mat);
+            mesh.name    = 'vmap_arrows';
             mesh.visible = this._visible;
             group.add(mesh);
         }
@@ -155,6 +199,10 @@ export class VectorMapLayer {
             const child = this._group.getObjectByName(`vmap_${TYPE_META[t].label}`);
             if (child) child.material.color.setHex(dark ? TYPE_META[t].dark : TYPE_META[t].light);
         }
+        const fill = this._group.getObjectByName('vmap_lanelet_fill');
+        if (fill) fill.material.color.setHex(dark ? LANELET_FILL_META.dark : LANELET_FILL_META.light);
+        const arrows = this._group.getObjectByName('vmap_arrows');
+        if (arrows) arrows.material.color.setHex(dark ? ARROW_META.dark : ARROW_META.light);
     }
 
     setZOffset(z) {

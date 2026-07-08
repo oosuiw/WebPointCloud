@@ -1051,6 +1051,13 @@ _VTAG  = re.compile(rb"""<tag\s+k=""" + _Q + rb"""([^'"]+)""" + _Q + rb"""\s+v="
 _VLOCAL_X = re.compile(rb"""local_x""")
 _VLOCAL_Y = re.compile(rb"""local_y""")
 
+# lanelet(relation) 파싱 — 속성 순서가 파일마다 달라서(type/ref/role 순서 불일치)
+# 각 속성을 독립적으로 검색
+_VREL         = re.compile(rb"""<relation\s+id=""" + _Q + rb"""(\d+)""" + _Q)
+_VMEMBER_TYPE = re.compile(rb"""type=""" + _Q + rb"""(\w+)""" + _Q)
+_VMEMBER_REF  = re.compile(rb"""ref=""" + _Q + rb"""(\d+)""" + _Q)
+_VMEMBER_ROLE = re.compile(rb"""role=""" + _Q + rb"""([^'"]*)""" + _Q)
+
 # way type → uint8 코드 (프론트엔드 색상표와 동기화)
 _VTYPE_MAP = {
     b'line_thin':   0,
@@ -1065,16 +1072,99 @@ _VTYPE_MAP = {
 }
 
 
+_LANELET_N_SAMPLES = 10     # lanelet 폭 방향 리샘플 포인트 수 (경계선 노드 수가 달라도 매끈한 리본 생성)
+_ARROW_SPACING_M = 8.0      # 방향 화살표(쉐브론) 간격 (미터)
+
+
+def _resample_polyline(pts: 'np.ndarray', n: int) -> 'np.ndarray':
+    """(M,3) 폴리라인을 호 길이 기준으로 n개 점으로 리샘플."""
+    if len(pts) == 1:
+        return np.repeat(pts, n, axis=0)
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    total = cum[-1]
+    if total <= 1e-9:
+        return np.repeat(pts[:1], n, axis=0)
+    targets = np.linspace(0.0, total, n)
+    idxs = np.clip(np.searchsorted(cum, targets, side='right') - 1, 0, len(pts) - 2)
+    seg_len = cum[idxs + 1] - cum[idxs]
+    frac = np.where(seg_len > 1e-9, (targets - cum[idxs]) / np.where(seg_len > 1e-9, seg_len, 1.0), 0.0)
+    return pts[idxs] + frac[:, None] * (pts[idxs + 1] - pts[idxs])
+
+
+def _build_lanelets(lanelets, ways, nodes, ox, oy, oz):
+    """left/right way 쌍으로부터 (삼각형 면 정점, 방향 화살표 세그먼트)를 생성."""
+    tri_rows: list = []      # 삼각형 정점 3개 * (x,y,z) = 9 floats
+    arrow_rows: list = []    # 화살표 선분 (x0,y0,z0,x1,y1,z1)
+    origin = np.array([ox, oy, oz])
+
+    for left_wid, right_wid in lanelets:
+        if left_wid not in ways or right_wid not in ways:
+            continue
+        left_refs = ways[left_wid][0]
+        right_refs = ways[right_wid][0]
+        left_pts = np.array([nodes[r] for r in left_refs if r in nodes], dtype=np.float64)
+        right_pts = np.array([nodes[r] for r in right_refs if r in nodes], dtype=np.float64)
+        if len(left_pts) < 2 or len(right_pts) < 2:
+            continue
+        left_pts -= origin
+        right_pts -= origin
+
+        L = _resample_polyline(left_pts, _LANELET_N_SAMPLES)
+        R = _resample_polyline(right_pts, _LANELET_N_SAMPLES)
+
+        for i in range(_LANELET_N_SAMPLES - 1):
+            tri_rows.append((*L[i], *R[i], *L[i + 1]))
+            tri_rows.append((*R[i], *R[i + 1], *L[i + 1]))
+
+        # 중심선 기준 방향 화살표(쉐브론 '>' 모양, 2개 선분)
+        center = (L + R) / 2.0
+        seg_len = np.linalg.norm(np.diff(center, axis=0), axis=1)
+        cum = np.concatenate([[0.0], np.cumsum(seg_len)])
+        total_len = cum[-1]
+        if total_len <= 1e-6:
+            continue
+        lane_width = float(np.mean(np.linalg.norm(R - L, axis=1)))
+        arrow_size = max(min(lane_width * 0.35, 1.5), 0.3)
+
+        n_arrows = max(1, int(total_len // _ARROW_SPACING_M))
+        targets = (np.linspace(total_len * 0.2, total_len * 0.8, n_arrows)
+                   if n_arrows > 1 else np.array([total_len * 0.5]))
+        idxs = np.clip(np.searchsorted(cum, targets, side='right') - 1, 0, len(center) - 2)
+        for t, idx in zip(targets, idxs):
+            seg_l = cum[idx + 1] - cum[idx]
+            frac = 0.0 if seg_l <= 1e-9 else (t - cum[idx]) / seg_l
+            pos = center[idx] + frac * (center[idx + 1] - center[idx])
+            tangent = center[idx + 1] - center[idx]
+            tn = np.linalg.norm(tangent[:2])
+            if tn <= 1e-9:
+                continue
+            d = tangent / np.linalg.norm(tangent)
+            perp = np.array([-d[1], d[0], 0.0])
+            tip = pos + d * arrow_size
+            back_l = pos - d * arrow_size * 0.3 + perp * arrow_size * 0.5
+            back_r = pos - d * arrow_size * 0.3 - perp * arrow_size * 0.5
+            arrow_rows.append((*back_l, *tip))
+            arrow_rows.append((*tip, *back_r))
+
+    return tri_rows, arrow_rows
+
+
 def _parse_vmap_bg(path: str, key: str, tmp_path: str = None) -> None:
     """백그라운드 파싱 — Lanelet2 OSM → Float32 세그먼트 배열 (type별 색상)"""
     try:
         file_size = os.path.getsize(path)
         nodes: dict[int, tuple] = {}
         ways:  dict[int, tuple] = {}   # wid → (refs, type_code)
+        lanelets: list = []            # [(left_way_id, right_way_id), ...]
         cur_wid = None
         cur_refs: list = []
         cur_type: int = 0
         in_way = False
+        in_rel = False
+        cur_rel_left = None
+        cur_rel_right = None
+        cur_rel_is_lanelet = False
         n_lines = 0
 
         with _vmap_cache_lock:
@@ -1165,6 +1255,37 @@ def _parse_vmap_bg(path: str, key: str, tmp_path: str = None) -> None:
                         ways[cur_wid] = (cur_refs[:], cur_type)
                     in_way = False; cur_wid = None
 
+                elif b'<relation' in line:
+                    m = _VREL.search(line)
+                    if m:
+                        cur_rel_left = cur_rel_right = None
+                        cur_rel_is_lanelet = False
+                        in_rel = True
+                    else:
+                        in_rel = False
+
+                elif in_rel and b'<member' in line:
+                    mt = _VMEMBER_TYPE.search(line)
+                    mr = _VMEMBER_REF.search(line)
+                    mrole = _VMEMBER_ROLE.search(line)
+                    if mt and mr and mrole and mt.group(1) == b'way':
+                        role = mrole.group(1)
+                        ref = int(mr.group(1))
+                        if role == b'left':
+                            cur_rel_left = ref
+                        elif role == b'right':
+                            cur_rel_right = ref
+
+                elif in_rel and b'<tag' in line:
+                    m = _VTAG.search(line)
+                    if m and m.group(1) == b'type' and m.group(2) == b'lanelet':
+                        cur_rel_is_lanelet = True
+
+                elif b'</relation>' in line:
+                    if in_rel and cur_rel_is_lanelet and cur_rel_left is not None and cur_rel_right is not None:
+                        lanelets.append((cur_rel_left, cur_rel_right))
+                    in_rel = False
+
         with _vmap_cache_lock:
             _vmap_cache[key]['progress'] = 70
             _vmap_cache[key]['message'] = f'세그먼트 빌드 중 ({len(ways):,} ways)...'
@@ -1193,21 +1314,33 @@ def _parse_vmap_bg(path: str, key: str, tmp_path: str = None) -> None:
                 pos_rows.append((x0 - ox, y0 - oy, z0 - oz, x1 - ox, y1 - oy, z1 - oz))
                 type_rows.append(tcode)
 
-        del nodes, ways
+        with _vmap_cache_lock:
+            _vmap_cache[key]['progress'] = 85
+            _vmap_cache[key]['message'] = f'차선 면/화살표 빌드 중 ({len(lanelets):,} lanelets)...'
+
+        tri_rows, arrow_rows = _build_lanelets(lanelets, ways, nodes, ox, oy, oz)
+
+        del nodes, ways, lanelets
 
         positions  = np.array(pos_rows,  dtype=np.float32)
         types_arr  = np.array(type_rows, dtype=np.uint8)
+        lanelet_tris   = np.array(tri_rows,   dtype=np.float32).reshape(-1, 3) if tri_rows else np.empty((0, 3), dtype=np.float32)
+        arrow_segs     = np.array(arrow_rows, dtype=np.float32).reshape(-1, 3) if arrow_rows else np.empty((0, 3), dtype=np.float32)
 
         with _vmap_cache_lock:
             _vmap_cache[key] = {
                 'status': 'ready',
                 'progress': 100,
-                'message': f'{len(pos_rows):,} 세그먼트 준비 완료',
+                'message': f'{len(pos_rows):,} 세그먼트 / {len(tri_rows)//2:,} lanelet 면 준비 완료',
                 'data': {
-                    'positions': positions,
-                    'types':     types_arr,
-                    'offset':    [ox, oy, oz],
-                    'seg_count': len(pos_rows),
+                    'positions':      positions,
+                    'types':          types_arr,
+                    'offset':         [ox, oy, oz],
+                    'seg_count':      len(pos_rows),
+                    'lanelet_verts':  lanelet_tris,
+                    'lanelet_count':  len(tri_rows),
+                    'arrow_verts':    arrow_segs,
+                    'arrow_count':    len(arrow_rows),
                 },
             }
 
@@ -1291,16 +1424,37 @@ def vmap_data(key):
         positions[:, 0] += dx;  positions[:, 3] += dx
         positions[:, 1] += dy;  positions[:, 4] += dy
 
-    buf = positions.tobytes() + data['types'].tobytes()
+    lanelet_verts = data.get('lanelet_verts')
+    arrow_verts = data.get('arrow_verts')
+    lanelet_count = data.get('lanelet_count', 0)
+    arrow_count = data.get('arrow_count', 0)
+    if (abs(dx) > 1e-3 or abs(dy) > 1e-3):
+        if lanelet_verts is not None and len(lanelet_verts):
+            lanelet_verts = lanelet_verts.copy()
+            lanelet_verts[:, 0] += dx; lanelet_verts[:, 1] += dy
+        if arrow_verts is not None and len(arrow_verts):
+            arrow_verts = arrow_verts.copy()
+            arrow_verts[:, 0] += dx; arrow_verts[:, 1] += dy
+
+    # 순서 주의: Float32 영역(positions/lanelet_verts/arrow_verts)을 모두 먼저 두고
+    # Uint8 영역(types)을 맨 뒤에 둬야 클라이언트에서 Float32Array 뷰의 시작
+    # 오프셋이 항상 4바이트 배수로 유지된다 (Uint8Array는 정렬 제약이 없음)
+    buf = (positions.tobytes()
+           + (lanelet_verts.tobytes() if lanelet_verts is not None else b'')
+           + (arrow_verts.tobytes() if arrow_verts is not None else b'')
+           + data['types'].tobytes())
     return Response(
         buf,
         mimetype='application/octet-stream',
         headers={
-            'X-Seg-Count':  str(data['seg_count']),
-            'X-Offset-X':   str(data['offset'][0]),
-            'X-Offset-Y':   str(data['offset'][1]),
-            'X-Offset-Z':   str(data['offset'][2]),
-            'Access-Control-Expose-Headers': 'X-Seg-Count,X-Offset-X,X-Offset-Y,X-Offset-Z',
+            'X-Seg-Count':    str(data['seg_count']),
+            'X-Offset-X':     str(data['offset'][0]),
+            'X-Offset-Y':     str(data['offset'][1]),
+            'X-Offset-Z':     str(data['offset'][2]),
+            'X-Lanelet-Count': str(lanelet_count),
+            'X-Arrow-Count':   str(arrow_count),
+            'Access-Control-Expose-Headers':
+                'X-Seg-Count,X-Offset-X,X-Offset-Y,X-Offset-Z,X-Lanelet-Count,X-Arrow-Count',
         },
     )
 
