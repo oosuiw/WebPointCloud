@@ -39,21 +39,29 @@ except ImportError:
 
 
 _Q = rb"""['"]"""
-_VNODE_PEEK = re.compile(rb"""<node\s+id=""" + _Q + rb"""(\d+)""" + _Q + rb"""[^>]+lat=""" + _Q + rb"""([\d.-]+)""" + _Q + rb"""[^>]+lon=""" + _Q + rb"""([\d.-]+)""" + _Q)
+# lat/lon 값은 '*'(0개 이상) — VMB로 만든 실내/로컬 전용 지도(GPS 미보유)는
+# lat="" lon="" 처럼 빈 문자열로 저장되며, local_x/local_y/ele 태그만 유효함.
+# '+' (1개 이상)로 두면 이런 파일의 <node> 자체가 매칭 실패해서 노드를 통째로
+# 못 읽고 지도가 텅 비어 보이는 문제가 있었음.
+_VNODE_PEEK = re.compile(rb"""<node\s+id=""" + _Q + rb"""(\d+)""" + _Q + rb"""[^>]+lat=""" + _Q + rb"""([\d.-]*)""" + _Q + rb"""[^>]+lon=""" + _Q + rb"""([\d.-]*)""" + _Q)
 
 
 def _peek_first_node_latlon(osm_path: str):
-    """파일 첫 <node>의 lat/lon을 훑어서 반환 (대표 좌표 판별용)."""
+    """파일 첫 (lat/lon이 실제로 채워진) <node>의 좌표를 훑어서 반환
+    (대표 좌표 판별용). lat=""/lon="" 인 로컬 전용 지도는 건너뛴다."""
     try:
         with open(osm_path, 'rb') as fh:
-            for _ in range(200):   # 헤더 근처만 확인하면 충분
+            for _ in range(2000):   # 초반 노드들이 전부 lat/lon 비어있을 수도 있어 넉넉히 확인
                 line = fh.readline()
                 if not line:
                     break
                 if b'<node' in line:
                     m = _VNODE_PEEK.search(line)
-                    if m:
-                        return float(m.group(2)), float(m.group(3))  # lat, lon
+                    if m and m.group(2) and m.group(3):
+                        try:
+                            return float(m.group(2)), float(m.group(3))  # lat, lon
+                        except ValueError:
+                            continue
     except OSError:
         pass
     return None
@@ -1043,6 +1051,21 @@ def analysis_icp():
 
 _vmap_cache: dict = {}          # key → {status, progress, message, data?}
 _vmap_cache_lock = threading.Lock()
+_VMAP_CACHE_MAX = 8             # 벡터맵은 로드할 때마다 수십MB 배열이 캐싱되므로
+                                 # 사용자가 명시적으로 지우지 않아도 무한정 쌓이지
+                                 # 않도록 개수 상한을 두고 오래된 것부터 제거
+
+
+def _evict_vmap_cache(exclude_key=None):
+    """캐시가 상한을 넘으면 오래된 항목부터 제거. 'parsing' 중인 항목과
+    exclude_key(방금 등록한 키)는 건드리지 않는다. 호출 전 _vmap_cache_lock을
+    이미 잡고 있어야 함(락을 다시 잡지 않음 — 비재진입 락이라 데드락 방지)."""
+    while len(_vmap_cache) > _VMAP_CACHE_MAX:
+        evictable = [k for k, v in _vmap_cache.items()
+                     if k != exclude_key and v.get('status') != 'parsing']
+        if not evictable:
+            break
+        del _vmap_cache[evictable[0]]  # dict는 삽입 순서를 유지 → 가장 오래된 것부터
 
 _VNODE = _VNODE_PEEK
 _VWAY  = re.compile(rb"""<way\s+id=""" + _Q + rb"""(\d+)""" + _Q)
@@ -1074,6 +1097,15 @@ _VTYPE_MAP = {
 
 _LANELET_N_SAMPLES = 10     # lanelet 폭 방향 리샘플 포인트 수 (경계선 노드 수가 달라도 매끈한 리본 생성)
 _ARROW_SPACING_M = 8.0      # 방향 화살표(쉐브론) 간격 (미터)
+_TRIS_PER_LANELET = (_LANELET_N_SAMPLES - 1) * 2   # lanelet 하나당 항상 이 개수만큼 삼각형 생성 (고정값)
+
+# lanelet subtype → uint8 코드 (프론트엔드 색상표와 동기화)
+_LANELET_SUBTYPE_MAP = {
+    b'road':          0,
+    b'crosswalk':      1,
+    b'walkway':        2,
+    b'road_shoulder':  3,
+}
 
 
 def _resample_polyline(pts: 'np.ndarray', n: int) -> 'np.ndarray':
@@ -1093,12 +1125,18 @@ def _resample_polyline(pts: 'np.ndarray', n: int) -> 'np.ndarray':
 
 
 def _build_lanelets(lanelets, ways, nodes, ox, oy, oz):
-    """left/right way 쌍으로부터 (삼각형 면 정점, 방향 화살표 세그먼트)를 생성."""
-    tri_rows: list = []      # 삼각형 정점 3개 * (x,y,z) = 9 floats
-    arrow_rows: list = []    # 화살표 선분 (x0,y0,z0,x1,y1,z1)
+    """left/right way 쌍으로부터 (삼각형 면 정점, 방향 화살표 세그먼트, subtype 코드,
+    lanelet 메타데이터)를 생성. lanelet 하나당 항상 _TRIS_PER_LANELET개의 삼각형을
+    생성하므로, subtype/메타데이터는 삼각형이 아니라 lanelet 단위로 1개씩만 저장
+    (클라이언트에서 triangle_index // _TRIS_PER_LANELET 로 역참조)."""
+    tri_rows: list = []       # 삼각형 정점 3개 * (x,y,z) = 9 floats
+    arrow_rows: list = []     # 화살표 선분 (x0,y0,z0,x1,y1,z1)
+    subtype_rows: list = []   # lanelet 하나당 1개 (uint8 코드)
+    meta_rows: list = []      # lanelet 하나당 1개 (dict)
     origin = np.array([ox, oy, oz])
 
-    for left_wid, right_wid in lanelets:
+    for ll in lanelets:
+        left_wid, right_wid = ll['left'], ll['right']
         if left_wid not in ways or right_wid not in ways:
             continue
         left_refs = ways[left_wid][0]
@@ -1116,6 +1154,15 @@ def _build_lanelets(lanelets, ways, nodes, ox, oy, oz):
         for i in range(_LANELET_N_SAMPLES - 1):
             tri_rows.append((*L[i], *R[i], *L[i + 1]))
             tri_rows.append((*R[i], *R[i + 1], *L[i + 1]))
+
+        subtype_rows.append(_LANELET_SUBTYPE_MAP.get(ll.get('subtype') or b'', 0))
+        meta_rows.append({
+            'id': ll.get('id'),
+            'subtype': (ll.get('subtype') or b'').decode('ascii', errors='ignore') or None,
+            'speed_limit': ll.get('speed_limit'),
+            'one_way': ll.get('one_way'),
+            'turn_direction': ll.get('turn_direction'),
+        })
 
         # 중심선 기준 방향 화살표(쉐브론 '>' 모양, 2개 선분)
         center = (L + R) / 2.0
@@ -1147,7 +1194,7 @@ def _build_lanelets(lanelets, ways, nodes, ox, oy, oz):
             arrow_rows.append((*back_l, *tip))
             arrow_rows.append((*tip, *back_r))
 
-    return tri_rows, arrow_rows
+    return tri_rows, arrow_rows, subtype_rows, meta_rows
 
 
 def _parse_vmap_bg(path: str, key: str, tmp_path: str = None) -> None:
@@ -1156,15 +1203,20 @@ def _parse_vmap_bg(path: str, key: str, tmp_path: str = None) -> None:
         file_size = os.path.getsize(path)
         nodes: dict[int, tuple] = {}
         ways:  dict[int, tuple] = {}   # wid → (refs, type_code)
-        lanelets: list = []            # [(left_way_id, right_way_id), ...]
+        lanelets: list = []            # [{'id','left','right','subtype','speed_limit','one_way','turn_direction'}, ...]
         cur_wid = None
         cur_refs: list = []
         cur_type: int = 0
         in_way = False
         in_rel = False
+        cur_rel_id = None
         cur_rel_left = None
         cur_rel_right = None
         cur_rel_is_lanelet = False
+        cur_rel_subtype = None
+        cur_rel_speed = None
+        cur_rel_oneway = None
+        cur_rel_turndir = None
         n_lines = 0
 
         with _vmap_cache_lock:
@@ -1196,13 +1248,19 @@ def _parse_vmap_bg(path: str, key: str, tmp_path: str = None) -> None:
                     m = _VNODE.search(line)
                     if m:
                         cur_nid = int(m.group(1))
-                        lat, lon = float(m.group(2)), float(m.group(3))
-                        if transformer:
-                            cx, cy = transformer.transform(lon, lat)
-                            if mgrs_origin:
-                                cx -= mgrs_origin[0]; cy -= mgrs_origin[1]
+                        # lat=""/lon="" (GPS 없는 실내/로컬 전용 지도)는 위경도 변환을
+                        # 건너뛰고 0으로 둔다 — local_x/local_y 태그가 있으면 아래에서
+                        # 그 값으로 덮어씀 (우선순위는 기존과 동일)
+                        if m.group(2) and m.group(3):
+                            lat, lon = float(m.group(2)), float(m.group(3))
+                            if transformer:
+                                cx, cy = transformer.transform(lon, lat)
+                                if mgrs_origin:
+                                    cx -= mgrs_origin[0]; cy -= mgrs_origin[1]
+                            else:
+                                cx, cy = lon, lat
                         else:
-                            cx, cy = lon, lat
+                            cx = cy = 0.0
                         cur_x, cur_y = cx, cy
                         cur_lx = cur_ly = cur_lz = None
                         in_node = True
@@ -1258,8 +1316,10 @@ def _parse_vmap_bg(path: str, key: str, tmp_path: str = None) -> None:
                 elif b'<relation' in line:
                     m = _VREL.search(line)
                     if m:
+                        cur_rel_id = int(m.group(1))
                         cur_rel_left = cur_rel_right = None
                         cur_rel_is_lanelet = False
+                        cur_rel_subtype = cur_rel_speed = cur_rel_oneway = cur_rel_turndir = None
                         in_rel = True
                     else:
                         in_rel = False
@@ -1278,12 +1338,27 @@ def _parse_vmap_bg(path: str, key: str, tmp_path: str = None) -> None:
 
                 elif in_rel and b'<tag' in line:
                     m = _VTAG.search(line)
-                    if m and m.group(1) == b'type' and m.group(2) == b'lanelet':
-                        cur_rel_is_lanelet = True
+                    if m:
+                        k, v = m.group(1), m.group(2)
+                        if k == b'type' and v == b'lanelet':
+                            cur_rel_is_lanelet = True
+                        elif k == b'subtype':
+                            cur_rel_subtype = v
+                        elif k == b'speed_limit':
+                            try: cur_rel_speed = float(v)
+                            except ValueError: pass
+                        elif k == b'one_way':
+                            cur_rel_oneway = v.decode('ascii', errors='ignore')
+                        elif k == b'turn_direction':
+                            cur_rel_turndir = v.decode('ascii', errors='ignore')
 
                 elif b'</relation>' in line:
                     if in_rel and cur_rel_is_lanelet and cur_rel_left is not None and cur_rel_right is not None:
-                        lanelets.append((cur_rel_left, cur_rel_right))
+                        lanelets.append({
+                            'id': cur_rel_id, 'left': cur_rel_left, 'right': cur_rel_right,
+                            'subtype': cur_rel_subtype, 'speed_limit': cur_rel_speed,
+                            'one_way': cur_rel_oneway, 'turn_direction': cur_rel_turndir,
+                        })
                     in_rel = False
 
         with _vmap_cache_lock:
@@ -1318,29 +1393,32 @@ def _parse_vmap_bg(path: str, key: str, tmp_path: str = None) -> None:
             _vmap_cache[key]['progress'] = 85
             _vmap_cache[key]['message'] = f'차선 면/화살표 빌드 중 ({len(lanelets):,} lanelets)...'
 
-        tri_rows, arrow_rows = _build_lanelets(lanelets, ways, nodes, ox, oy, oz)
+        tri_rows, arrow_rows, subtype_rows, meta_rows = _build_lanelets(lanelets, ways, nodes, ox, oy, oz)
 
         del nodes, ways, lanelets
 
         positions  = np.array(pos_rows,  dtype=np.float32)
         types_arr  = np.array(type_rows, dtype=np.uint8)
-        lanelet_tris   = np.array(tri_rows,   dtype=np.float32).reshape(-1, 3) if tri_rows else np.empty((0, 3), dtype=np.float32)
-        arrow_segs     = np.array(arrow_rows, dtype=np.float32).reshape(-1, 3) if arrow_rows else np.empty((0, 3), dtype=np.float32)
+        lanelet_tris    = np.array(tri_rows,    dtype=np.float32).reshape(-1, 3) if tri_rows else np.empty((0, 3), dtype=np.float32)
+        arrow_segs      = np.array(arrow_rows,  dtype=np.float32).reshape(-1, 3) if arrow_rows else np.empty((0, 3), dtype=np.float32)
+        subtype_arr     = np.array(subtype_rows, dtype=np.uint8) if subtype_rows else np.empty((0,), dtype=np.uint8)
 
         with _vmap_cache_lock:
             _vmap_cache[key] = {
                 'status': 'ready',
                 'progress': 100,
-                'message': f'{len(pos_rows):,} 세그먼트 / {len(tri_rows)//2:,} lanelet 면 준비 완료',
+                'message': f'{len(pos_rows):,} 세그먼트 / {len(meta_rows):,} lanelet 준비 완료',
                 'data': {
-                    'positions':      positions,
-                    'types':          types_arr,
-                    'offset':         [ox, oy, oz],
-                    'seg_count':      len(pos_rows),
-                    'lanelet_verts':  lanelet_tris,
-                    'lanelet_count':  len(tri_rows),
-                    'arrow_verts':    arrow_segs,
-                    'arrow_count':    len(arrow_rows),
+                    'positions':         positions,
+                    'types':             types_arr,
+                    'offset':            [ox, oy, oz],
+                    'seg_count':         len(pos_rows),
+                    'lanelet_verts':     lanelet_tris,
+                    'lanelet_count':     len(tri_rows),
+                    'arrow_verts':       arrow_segs,
+                    'arrow_count':       len(arrow_rows),
+                    'lanelet_subtypes':  subtype_arr,
+                    'lanelet_meta':      meta_rows,
                 },
             }
 
@@ -1372,22 +1450,24 @@ def vmap_load():
     real_path = tmp_path
     key = hashlib.md5(f.filename.encode() + str(os.path.getsize(tmp_path)).encode()).hexdigest()[:16]
 
+    # 확인(check)과 등록(set)을 같은 락 안에서 원자적으로 처리 — 그렇지 않으면
+    # 동시에 들어온 두 요청이 둘 다 "아직 파싱 안 함"으로 보고 같은 파일을
+    # 중복 파싱하는 race condition이 생김
     with _vmap_cache_lock:
         st = _vmap_cache.get(key, {}).get('status', 'idle')
+        should_start = st not in ('ready', 'parsing')
+        if should_start:
+            _vmap_cache[key] = {'status': 'parsing', 'progress': 0, 'message': '파싱 시작...'}
+            _evict_vmap_cache(exclude_key=key)
+        result_status = 'parsing' if should_start else st
 
-    if st == 'ready':
+    if should_start:
+        threading.Thread(target=_parse_vmap_bg, args=(real_path, key, tmp_path), daemon=True).start()
+    else:
         try: os.unlink(tmp_path)
         except: pass
-        return jsonify({'key': key, 'status': 'ready'})
-    if st == 'parsing':
-        try: os.unlink(tmp_path)
-        except: pass
-        return jsonify({'key': key, 'status': 'parsing'})
 
-    with _vmap_cache_lock:
-        _vmap_cache[key] = {'status': 'parsing', 'progress': 0, 'message': '파싱 시작...'}
-    threading.Thread(target=_parse_vmap_bg, args=(real_path, key, tmp_path), daemon=True).start()
-    return jsonify({'key': key, 'status': 'parsing'})
+    return jsonify({'key': key, 'status': result_status})
 
 
 @api_bp.route('/api/vectormap/status/<key>')
@@ -1436,13 +1516,16 @@ def vmap_data(key):
             arrow_verts = arrow_verts.copy()
             arrow_verts[:, 0] += dx; arrow_verts[:, 1] += dy
 
+    lanelet_subtypes = data.get('lanelet_subtypes')
+
     # 순서 주의: Float32 영역(positions/lanelet_verts/arrow_verts)을 모두 먼저 두고
-    # Uint8 영역(types)을 맨 뒤에 둬야 클라이언트에서 Float32Array 뷰의 시작
-    # 오프셋이 항상 4바이트 배수로 유지된다 (Uint8Array는 정렬 제약이 없음)
+    # Uint8 영역(types/lanelet_subtypes)을 맨 뒤에 둬야 클라이언트에서 Float32Array
+    # 뷰의 시작 오프셋이 항상 4바이트 배수로 유지된다 (Uint8Array는 정렬 제약이 없음)
     buf = (positions.tobytes()
            + (lanelet_verts.tobytes() if lanelet_verts is not None else b'')
            + (arrow_verts.tobytes() if arrow_verts is not None else b'')
-           + data['types'].tobytes())
+           + data['types'].tobytes()
+           + (lanelet_subtypes.tobytes() if lanelet_subtypes is not None else b''))
     return Response(
         buf,
         mimetype='application/octet-stream',
@@ -1457,6 +1540,17 @@ def vmap_data(key):
                 'X-Seg-Count,X-Offset-X,X-Offset-Y,X-Offset-Z,X-Lanelet-Count,X-Arrow-Count',
         },
     )
+
+
+@api_bp.route('/api/vectormap/lanelet_meta/<key>')
+def vmap_lanelet_meta(key):
+    """lanelet 메타데이터(id/subtype/speed_limit/one_way/turn_direction) JSON 반환.
+    lanelet_index(= triangle_index // _TRIS_PER_LANELET) 순서와 일치."""
+    with _vmap_cache_lock:
+        entry = _vmap_cache.get(key)
+    if not entry or entry.get('status') != 'ready':
+        return jsonify({'error': 'not ready'}), 404
+    return jsonify({'lanelets': entry['data'].get('lanelet_meta', [])})
 
 
 @api_bp.route('/api/vectormap/clear/<key>', methods=['DELETE'])

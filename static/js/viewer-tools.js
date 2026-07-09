@@ -170,6 +170,35 @@ export function takeScreenshot(viewer) {
 
 /* ── Point Info ── */
 
+function _laneletFillTargets(viewer) {
+    return viewer.vmapLayers.flatMap(l => l.getLaneletFillMeshes()).filter(m => m.visible);
+}
+
+function _buildInfoText(viewer, hit) {
+    // lanelet 면(클릭 정보) — subtype/speed_limit/one_way/turn_direction 표시
+    if (hit.object?.name?.startsWith('vmap_lanelet_fill_')) {
+        const layer = hit.object.userData.layer;
+        const meta = layer?.getLaneletInfo(hit.object, hit.faceIndex);
+        if (meta) {
+            const parts = [`Lanelet #${meta.id ?? '?'}`];
+            if (meta.subtype) parts.push(meta.subtype);
+            if (meta.speed_limit != null) parts.push(`${meta.speed_limit}km/h`);
+            if (meta.one_way) parts.push(`one_way=${meta.one_way}`);
+            if (meta.turn_direction) parts.push(`turn=${meta.turn_direction}`);
+            return parts.join('  ');
+        }
+    }
+    // 포인트클라우드 — 좌표/intensity 표시
+    const pt = hit.point;
+    const _ox = viewer.coordOffset ? viewer.coordOffset[0] : 0;
+    const _oy = viewer.coordOffset ? viewer.coordOffset[1] : 0;
+    const _oz = viewer.coordOffset ? viewer.coordOffset[2] : 0;
+    let info = `X: ${(pt.x+_ox).toFixed(3)}  Y: ${(pt.y+_oy).toFixed(3)}  Z: ${(pt.z+_oz).toFixed(3)}`;
+    const intAttr = hit.object?.geometry?.getAttribute('intensity');
+    if (intAttr && hit.index != null) info += `  I: ${intAttr.getX(hit.index).toFixed(3)}`;
+    return info;
+}
+
 export function initPointInfo(viewer) {
     const infoEl = document.getElementById('point-info');
     viewer.renderer.domElement.addEventListener('mousemove', e => {
@@ -187,21 +216,14 @@ export function initPointInfo(viewer) {
         raycaster.setFromCamera(mouse, viewer.camera);
         const targets = [viewer.pointCloud, viewer.mapCloud, viewer.rawCloud, viewer.curCloud,
                          viewer.kf0Cloud, viewer.kf1Cloud, ...viewer.kfrmClouds]
-                         .filter(c => c && c.visible);
+                         .filter(c => c && c.visible)
+                         .concat(_laneletFillTargets(viewer));
         const hits = raycaster.intersectObjects(targets);
         if (hits.length === 0) { infoEl.style.display = 'none'; return; }
-        const hit = hits[0];
-        const pt = hit.point;
-        const _ox = viewer.coordOffset ? viewer.coordOffset[0] : 0;
-        const _oy = viewer.coordOffset ? viewer.coordOffset[1] : 0;
-        const _oz = viewer.coordOffset ? viewer.coordOffset[2] : 0;
-        let info = `X: ${(pt.x+_ox).toFixed(3)}  Y: ${(pt.y+_oy).toFixed(3)}  Z: ${(pt.z+_oz).toFixed(3)}`;
-        const intAttr = hit.object?.geometry?.getAttribute('intensity');
-        if (intAttr && hit.index != null) info += `  I: ${intAttr.getX(hit.index).toFixed(3)}`;
         infoEl.style.display = 'block';
         infoEl.style.left = `${e.clientX - rect.left + 16}px`;
         infoEl.style.top = `${e.clientY - rect.top - 10}px`;
-        infoEl.textContent = info;
+        infoEl.textContent = _buildInfoText(viewer, hits[0]);
     });
     viewer.renderer.domElement.addEventListener('mouseleave', () => {
         infoEl.style.display = 'none';
@@ -231,21 +253,14 @@ export function initPointInfo(viewer) {
         raycaster.setFromCamera(mouse, viewer.camera);
         const targets = [viewer.pointCloud, viewer.mapCloud, viewer.rawCloud, viewer.curCloud,
                          viewer.kf0Cloud, viewer.kf1Cloud, ...viewer.kfrmClouds]
-                         .filter(c => c && c.visible);
+                         .filter(c => c && c.visible)
+                         .concat(_laneletFillTargets(viewer));
         const hits = raycaster.intersectObjects(targets);
         if (hits.length === 0) return;
-        const hit = hits[0];
-        const pt = hit.point;
-        const _ox2 = viewer.coordOffset ? viewer.coordOffset[0] : 0;
-        const _oy2 = viewer.coordOffset ? viewer.coordOffset[1] : 0;
-        const _oz2 = viewer.coordOffset ? viewer.coordOffset[2] : 0;
-        let info = `X: ${(pt.x+_ox2).toFixed(3)}  Y: ${(pt.y+_oy2).toFixed(3)}  Z: ${(pt.z+_oz2).toFixed(3)}`;
-        const intAttr = hit.object?.geometry?.getAttribute('intensity');
-        if (intAttr && hit.index != null) info += `  I: ${intAttr.getX(hit.index).toFixed(3)}`;
         infoEl.style.display = 'block';
         infoEl.style.left = `${touch.clientX - rect.left + 16}px`;
         infoEl.style.top = `${touch.clientY - rect.top - 10}px`;
-        infoEl.textContent = info;
+        infoEl.textContent = _buildInfoText(viewer, hits[0]);
     });
 }
 

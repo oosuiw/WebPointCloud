@@ -12,9 +12,18 @@ const TYPE_META = [
     { label: 'curb',    dark: 0x555555, light: 0x333333 },  // 4: 연석
 ];
 
-// lanelet 면 채우기 색 (반투명) / 방향 화살표 색
-const LANELET_FILL_META = { dark: 0x4a7dff, light: 0x3a6bdf, opacity: 0.16 };
+// lanelet subtype 코드 → 색상 (api.py _LANELET_SUBTYPE_MAP과 동기화)
+const LANELET_SUBTYPE_META = [
+    { label: 'road',      dark: 0x4a7dff, light: 0x3a6bdf },  // 0
+    { label: 'crosswalk', dark: 0xffa726, light: 0xe08600 },  // 1
+    { label: 'walkway',   dark: 0x66bb6a, light: 0x2e8b3d },  // 2
+    { label: 'shoulder',  dark: 0x9575cd, light: 0x6a4bb5 },  // 3
+];
+const LANELET_FILL_OPACITY = 0.18;
 const ARROW_META = { dark: 0xffd166, light: 0xb8860b };
+
+// lanelet 하나당 항상 이 개수만큼 삼각형이 생성됨 (api.py _TRIS_PER_LANELET과 동기화)
+const TRIS_PER_LANELET = 18;
 
 export class VectorMapLayer {
     constructor(scene) {
@@ -26,6 +35,7 @@ export class VectorMapLayer {
         this._zOffset   = 0.0;
         this._dark      = true;
         this._baseZ     = 0.0;   // vmapOz - coordOffset[2] (고도 정렬 기준)
+        this._laneletMeta = [];  // lanelet_index → {id, subtype, speed_limit, one_way, turn_direction}
     }
 
     get isLoaded() { return this._group !== null; }
@@ -73,22 +83,35 @@ export class VectorMapLayer {
         const vmapOy    = parseFloat(binResp.headers.get('X-Offset-Y') || '0');
         const vmapOz    = parseFloat(binResp.headers.get('X-Offset-Z') || '0');
         const buf       = await binResp.arrayBuffer();
-        // 서버 전송 순서: positions(f32) → lanelet_verts(f32) → arrow_verts(f32) → types(u8)
+        // 서버 전송 순서: positions(f32) → lanelet_verts(f32) → arrow_verts(f32) → types(u8) → lanelet_subtypes(u8)
         // (Uint8 영역을 맨 뒤에 둬야 Float32Array 뷰들의 시작 오프셋이 4바이트 배수로 유지됨)
+        const nLanelets    = Math.round(laneletCount / TRIS_PER_LANELET);
         const posBytes     = segCount * 6 * 4;
         const laneletBytes = laneletCount * 9 * 4;   // 삼각형당 정점 3개 * 3좌표 * 4바이트
         const arrowBytes   = arrowCount * 6 * 4;     // 선분당 정점 2개 * 3좌표 * 4바이트
 
-        const positions    = new Float32Array(buf, 0, segCount * 6);
-        const laneletVerts = new Float32Array(buf, posBytes, laneletCount * 9);
-        const arrowVerts   = new Float32Array(buf, posBytes + laneletBytes, arrowCount * 6);
-        const types        = new Uint8Array(buf, posBytes + laneletBytes + arrowBytes, segCount);
+        const positions       = new Float32Array(buf, 0, segCount * 6);
+        const laneletVerts    = new Float32Array(buf, posBytes, laneletCount * 9);
+        const arrowVerts      = new Float32Array(buf, posBytes + laneletBytes, arrowCount * 6);
+        const types           = new Uint8Array(buf, posBytes + laneletBytes + arrowBytes, segCount);
+        const laneletSubtypes = new Uint8Array(buf, posBytes + laneletBytes + arrowBytes + segCount, nLanelets);
 
         this._vmapOx = vmapOx;
         this._vmapOy = vmapOy;
         this._vmapOz = vmapOz;
 
-        this._buildMesh(positions, types, segCount, laneletVerts, arrowVerts);
+        // lanelet 메타데이터(속성 정보) fetch — 클릭 정보 표시용
+        if (nLanelets > 0) {
+            try {
+                const metaResp = await fetch(`/api/vectormap/lanelet_meta/${this._key}`);
+                const metaJson = await metaResp.json();
+                this._laneletMeta = metaJson.lanelets || [];
+            } catch (e) { this._laneletMeta = []; }
+        } else {
+            this._laneletMeta = [];
+        }
+
+        this._buildMesh(positions, types, segCount, laneletVerts, arrowVerts, laneletSubtypes, nLanelets);
 
         // coordOffset(PCD 기준 또는 첫 번째 OSM 기준)이 있으면 좌표 정렬
         if (coordOffset && this._group) {
@@ -101,8 +124,8 @@ export class VectorMapLayer {
         onDone?.(segCount, { vmapOx, vmapOy });
     }
 
-    // ── Three.js 메시 구성 — 타입별 LineSegments + lanelet 면 + 방향 화살표 ──
-    _buildMesh(positions, types, segCount, laneletVerts, arrowVerts) {
+    // ── Three.js 메시 구성 — 타입별 LineSegments + subtype별 lanelet 면 + 방향 화살표 ──
+    _buildMesh(positions, types, segCount, laneletVerts, arrowVerts, laneletSubtypes, nLanelets) {
         const group = new THREE.Group();
         group.name = 'vectormap';
         group.position.z = this._zOffset;
@@ -136,23 +159,49 @@ export class VectorMapLayer {
             group.add(mesh);
         }
 
-        // lanelet 면 채우기 (반투명) — 경계선보다 살짝 아래(depthWrite:false)로
-        // 그려서 z-fighting 없이 라인이 위에 또렷하게 보이도록 함
-        if (laneletVerts && laneletVerts.length) {
-            const geom = new THREE.BufferGeometry();
-            geom.setAttribute('position', new THREE.BufferAttribute(laneletVerts, 3));
-            const col = this._dark ? LANELET_FILL_META.dark : LANELET_FILL_META.light;
-            const mat = new THREE.MeshBasicMaterial({
-                color: col,
-                transparent: true,
-                opacity: LANELET_FILL_META.opacity,
-                side: THREE.DoubleSide,
-                depthWrite: false,
-            });
-            const mesh = new THREE.Mesh(geom, mat);
-            mesh.name    = 'vmap_lanelet_fill';
-            mesh.visible = this._visible;
-            group.add(mesh);
+        // lanelet 면 채우기 (반투명, subtype별 색상 분리) — 경계선보다 살짝 아래
+        // (depthWrite:false)로 그려서 z-fighting 없이 라인이 위에 또렷하게 보이도록 함.
+        // 각 mesh에는 userData.laneletIndexOf(버킷 내 삼각형 → 전역 lanelet 인덱스)와
+        // userData.layer(속성 조회용 back-reference)를 저장해 클릭 정보 조회에 사용.
+        if (laneletVerts && laneletVerts.length && nLanelets > 0) {
+            const subtypeBuckets = LANELET_SUBTYPE_META.map(() => []);  // lanelet 인덱스 목록
+            for (let li = 0; li < nLanelets; li++) {
+                const st = laneletSubtypes[li] < LANELET_SUBTYPE_META.length ? laneletSubtypes[li] : 0;
+                subtypeBuckets[st].push(li);
+            }
+
+            for (let st = 0; st < LANELET_SUBTYPE_META.length; st++) {
+                const laneletIdxs = subtypeBuckets[st];
+                if (!laneletIdxs.length) continue;
+
+                const triCount = laneletIdxs.length * TRIS_PER_LANELET;
+                const pos = new Float32Array(triCount * 9);
+                const laneletIndexOf = new Int32Array(triCount);
+                let o = 0;
+                for (const li of laneletIdxs) {
+                    const srcTri = li * TRIS_PER_LANELET;
+                    pos.set(laneletVerts.subarray(srcTri * 9, (srcTri + TRIS_PER_LANELET) * 9), o * 9);
+                    laneletIndexOf.fill(li, o, o + TRIS_PER_LANELET);
+                    o += TRIS_PER_LANELET;
+                }
+
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                const col = this._dark ? LANELET_SUBTYPE_META[st].dark : LANELET_SUBTYPE_META[st].light;
+                const mat = new THREE.MeshBasicMaterial({
+                    color: col,
+                    transparent: true,
+                    opacity: LANELET_FILL_OPACITY,
+                    side: THREE.DoubleSide,
+                    depthWrite: false,
+                });
+                const mesh = new THREE.Mesh(geom, mat);
+                mesh.name    = `vmap_lanelet_fill_${LANELET_SUBTYPE_META[st].label}`;
+                mesh.visible = this._visible;
+                mesh.userData.laneletIndexOf = laneletIndexOf;
+                mesh.userData.layer = this;
+                group.add(mesh);
+            }
         }
 
         // 방향 화살표 (쉐브론)
@@ -169,6 +218,19 @@ export class VectorMapLayer {
 
         this._group = group;
         this.scene.add(group);
+    }
+
+    /* 클릭/호버 지점의 lanelet 메타데이터 조회 — mesh는 vmap_lanelet_fill_* 여야 함 */
+    getLaneletInfo(mesh, faceIndex) {
+        const idx = mesh?.userData?.laneletIndexOf?.[faceIndex];
+        if (idx === undefined) return null;
+        return this._laneletMeta[idx] || null;
+    }
+
+    /* 이 레이어의 모든 lanelet 면 mesh 목록 (레이캐스팅 대상 수집용) */
+    getLaneletFillMeshes() {
+        if (!this._group) return [];
+        return this._group.children.filter(c => c.name.startsWith('vmap_lanelet_fill_'));
     }
 
     // ── polling ──────────────────────────────────────────
@@ -199,8 +261,10 @@ export class VectorMapLayer {
             const child = this._group.getObjectByName(`vmap_${TYPE_META[t].label}`);
             if (child) child.material.color.setHex(dark ? TYPE_META[t].dark : TYPE_META[t].light);
         }
-        const fill = this._group.getObjectByName('vmap_lanelet_fill');
-        if (fill) fill.material.color.setHex(dark ? LANELET_FILL_META.dark : LANELET_FILL_META.light);
+        for (let st = 0; st < LANELET_SUBTYPE_META.length; st++) {
+            const fill = this._group.getObjectByName(`vmap_lanelet_fill_${LANELET_SUBTYPE_META[st].label}`);
+            if (fill) fill.material.color.setHex(dark ? LANELET_SUBTYPE_META[st].dark : LANELET_SUBTYPE_META[st].light);
+        }
         const arrows = this._group.getObjectByName('vmap_arrows');
         if (arrows) arrows.material.color.setHex(dark ? ARROW_META.dark : ARROW_META.light);
     }

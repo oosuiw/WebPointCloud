@@ -65,6 +65,10 @@ export function initViewControls(viewer, legend, deps, uiState) {
 
     // ── Grid ──
     $('ckb-grid').addEventListener('change', e => viewer.toggleGrid(e.target.checked));
+    $('spb-grid-cell')?.addEventListener('change', e => {
+        const v = parseFloat(e.target.value);
+        viewer.setGridCellSize(Number.isFinite(v) && v > 0 ? v : null);
+    });
 
     // ── Layer visibility ──
     const vmapChk = $('ckb-vmap-pts');

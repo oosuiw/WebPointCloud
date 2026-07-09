@@ -122,6 +122,7 @@ export class Viewer {
         }, { passive: false, capture: true });
 
         // Grid (Z-up)
+        this._gridCellSize = null;   // null이면 데이터 범위 기반 자동 계산, 값이 있으면 셀 크기 고정
         this.grid = this._makeGrid(1000, 100, 0, 0);
         this.scene.add(this.grid);
         this._lastGridExtent = 0;
@@ -1797,20 +1798,35 @@ export class Viewer {
 
     _updateGrid() {
         const b = this.bounds;
-        if (!b) return;
-        const cx = (b.xMin + b.xMax) / 2;
-        const cy = (b.yMin + b.yMax) / 2;
-        const extent = Math.max(b.xMax - b.xMin, b.yMax - b.yMin, 10);
+        let cx = 0, cy = 0, extent;
+        if (b) {
+            cx = (b.xMin + b.xMax) / 2;
+            cy = (b.yMin + b.yMax) / 2;
+            extent = Math.max(b.xMax - b.xMin, b.yMax - b.yMin, 10);
+        } else {
+            extent = this._lastGridExtent || 100;
+        }
         const gridSize = Math.ceil(extent * 1.6);
-        const cellSize = Math.pow(10, Math.floor(Math.log10(Math.max(extent / 10, 1))));
-        const divisions = Math.min(Math.ceil(gridSize / cellSize), 500);
+        const cellSize = this._gridCellSize > 0
+            ? this._gridCellSize
+            : Math.pow(10, Math.floor(Math.log10(Math.max(extent / 10, 1))));
+        const divisions = Math.min(Math.max(Math.ceil(gridSize / cellSize), 1), 2000);
 
         const show = this.grid.visible;
         this.scene.remove(this.grid);
+        this.grid.geometry.dispose();
+        this.grid.material.dispose();
         this.grid = this._makeGrid(gridSize, divisions, cx, cy);
         this.grid.visible = show;
         this.scene.add(this.grid);
         this._lastGridExtent = extent;
+    }
+
+    /* 셀 당 크기를 직접 지정 (m). null/0 이하로 주면 자동 계산으로 복귀 */
+    setGridCellSize(size) {
+        this._gridCellSize = (size && size > 0) ? size : null;
+        this._updateGrid();
+        this._dirty = true;
     }
 
     _fitCamera() {
